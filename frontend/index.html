@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vizit Kağıdı — Yoğun Bakım Takip Sistemi</title>
+  <meta name="description" content="Yoğun bakım servisi hasta takip ve vizit kağıdı sistemi." />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<!-- ══ HEADER ════════════════════════════════════════════════════════════════ -->
+<header>
+  <div class="header-logo">
+    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.8"
+         stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="26" height="26" rx="4"/>
+      <path d="M16 10v12M10 16h12"/>
+    </svg>
+    <div>
+      <div class="header-title">Vizit Kağıdı</div>
+      <div class="header-subtitle">Yoğun Bakım Takip Sistemi</div>
+    </div>
+  </div>
+
+  <!-- Ünite seçim butonları -->
+  <nav class="unite-nav" id="uniteNav" aria-label="Ünite seçimi">
+    <!-- JS ile doldurulur -->
+  </nav>
+
+  <!-- Aktif/Taburcu tab -->
+  <div class="tab-bar" id="tabBar">
+    <button class="tab-btn active" id="tabAktif" onclick="switchTab('aktif')">
+      Aktif <span class="badge" id="badgeAktif">0</span>
+    </button>
+    <button class="tab-btn" id="tabTaburcu" onclick="switchTab('taburcu')">
+      Taburcu <span class="badge" id="badgeTaburcu">0</span>
+    </button>
+  </div>
+
+  <div class="header-actions">
+    <button class="btn btn-secondary" id="btnExportPdf" onclick="exportPdf()" title="PDF İndir">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+      </svg>
+      PDF İndir
+    </button>
+    <button class="btn btn-primary" id="btnYeniHasta" onclick="hastaEkleAc()">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+      Yeni Hasta
+    </button>
+  </div>
+</header>
+
+<!-- ══ ANA İÇERİK ════════════════════════════════════════════════════════════ -->
+<main>
+
+  <!-- Stat chips -->
+  <div class="stat-chips" id="statChips">
+    <div class="stat-chip total">👥 Toplam: <strong id="statToplam">0</strong></div>
+    <div class="stat-chip vent">🫁 Vent: <strong id="statVent">0</strong></div>
+    <div class="stat-chip inot">💉 İnot: <strong id="statInot">0</strong></div>
+    <div class="stat-chip upcoming">⚠️ Yaklaşan: <strong id="statIslem">0</strong></div>
+  </div>
+
+  <!-- Araç çubuğu -->
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <div class="search-box">
+        <svg class="search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="text" id="searchInput" placeholder="Ad, yatak no veya tanı ara…"
+               oninput="filterHastalar()" />
+      </div>
+    </div>
+    <div class="toolbar-right">
+      <button class="btn btn-secondary btn-sm" onclick="sortBy('yatak')">Yatak Sırası</button>
+      <button class="btn btn-secondary btn-sm" onclick="sortBy('guncelleme')">Son Güncelleme</button>
+    </div>
+  </div>
+
+  <!-- Hasta grid -->
+  <div class="hasta-grid" id="hastaGrid"></div>
+
+</main>
+
+<!-- ══ HASTA EKLE / DÜZENLE MODAL ═══════════════════════════════════════════ -->
+<div class="modal-overlay" id="hastaModal" onclick="modalDisiTiklandi(event,'hastaModal')">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="hastaModalTitle">
+
+    <div class="modal-header">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+        <circle cx="12" cy="7" r="4"/>
+      </svg>
+      <h2 id="hastaModalTitle">Yeni Hasta</h2>
+      <button class="modal-close" onclick="modalKapat('hastaModal')" aria-label="Kapat">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <form id="hastaForm" onsubmit="hastaKaydet(event)">
+
+        <!-- TEMEL BİLGİLER -->
+        <div class="form-section">
+          <div class="form-section-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+              <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+            </svg>
+            Temel Bilgiler
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="fUnite">Ünite <span class="required">*</span></label>
+              <select class="form-select" id="fUnite" onchange="uniteSecildi()" required>
+                <!-- JS ile doldurulur -->
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="fYatakNo">Yatak No <span class="required">*</span></label>
+              <select class="form-select" id="fYatakNo" required>
+                <option value="">— Önce ünite seçin —</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="fAdSoyad">Ad Soyad / Hasta Kodu <span class="required">*</span></label>
+              <input class="form-input" type="text" id="fAdSoyad"
+                     placeholder="Hasta adı veya kodu" required />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="fTani">Tanı / Kabul Nedeni</label>
+              <input class="form-input" type="text" id="fTani" placeholder="Kabul tanısı…" />
+            </div>
+          </div>
+        </div>
+
+        <!-- KLİNİK DURUM -->
+        <div class="form-section">
+          <div class="form-section-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            Klinik Durum
+          </div>
+
+          <!-- Solunum Desteği / Hava Yolu -->
+          <div class="form-row">
+            <div class="form-group" style="grid-column:1/-1;">
+              <label class="form-label">Solunum Desteği / Hava Yolu</label>
+              <select class="form-select" id="fHavaYolu" onchange="havaYoluDegisti()">
+                <option value="">— Seçin —</option>
+                <option value="Entübe/Trakeostomili">Entübe / Trakeostomili</option>
+                <option value="Entübe değil">Entübe değil</option>
+              </select>
+            </div>
+          </div>
+          
+          <!-- Entübe / Trakeostomili ise -->
+          <div id="entubeDestekDiv" style="display:none; margin-top:10px;">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label" for="fEntubeDestek">Destek Türü</label>
+                <select class="form-select" id="fEntubeDestek" onchange="entubeDestekDegisti()">
+                  <option value="">— Seçin —</option>
+                  <option value="Oda havası">Oda havası (T-tüp/trach collar, spontan)</option>
+                  <option value="Humidvent">Humidvent</option>
+                  <option value="T-tüp">T-tüp</option>
+                  <option value="Mekanik ventilatöre bağlı">Mekanik ventilatöre bağlı</option>
+                </select>
+              </div>
+              <div class="form-group" id="ventModRow" style="display:none;">
+                <label class="form-label" for="fVentMod">Mod</label>
+                <select class="form-select" id="fVentMod" onchange="ventModDegisti()">
+                  <option value="">— Seçin —</option>
+                  <option>SIMV</option>
+                  <option>CPAP</option>
+                  <option>AC/VC</option>
+                  <option>PRVC</option>
+                  <option>APRV</option>
+                  <option>Diğer</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row" id="ventModDigerRow" style="display:none; margin-top:10px;">
+              <div class="form-group" style="grid-column:1/-1;">
+                <label class="form-label" for="fVentModDiger">Mod detayı</label>
+                <input class="form-input" type="text" id="fVentModDiger" placeholder="Mod ve ayarlar (FiO2, PEEP, TV…)" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Entübe değilse -->
+          <div id="nonEntubeDestekDiv" style="display:none; margin-top:10px;">
+            <div class="form-row">
+              <div class="form-group" style="grid-column:1/-1;">
+                <label class="form-label">Destek Türü (Birden fazla seçilebilir)</label>
+                <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:4px;" id="fNonEntubeDestekGroup">
+                  <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="Oda havasında"> Oda havasında</label>
+                  <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="Nazal kanül"> Nazal kanül</label>
+                  <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="Basit maske"> Basit maske</label>
+                  <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="Rezervuarlı maske"> Rezervuarlı maske</label>
+                  <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="Aralıklı CPAP"> Aralıklı CPAP</label>
+                  <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="Aralıklı HFNO"> Aralıklı HFNO</label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- İnotrop -->
+          <div class="form-row" style="margin-top:10px;">
+            <div class="form-group" style="grid-column:1/-1;">
+              <label class="form-label">İnotrop / Vazopressör</label>
+              <label class="toggle-group" id="inotToggleGroup">
+                <div class="toggle-switch">
+                  <input type="checkbox" id="fInotVar" onchange="onToggle('inot')" />
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </div>
+                <span class="toggle-label" id="inotLabel">Kullanılmıyor</span>
+              </label>
+            </div>
+          </div>
+          <div id="inotAjanlarDiv" style="display:none; margin-top:4px;">
+            <div class="dynamic-list" id="inotAjanList"></div>
+            <button type="button" class="btn-add-item" onclick="ajanEkle('inot')">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              İnotrop ajan ekle
+            </button>
+          </div>
+
+          <!-- Sedasyon -->
+          <div class="form-row" style="margin-top:10px;">
+            <div class="form-group" style="grid-column:1/-1;">
+              <label class="form-label">Sedasyon</label>
+              <label class="toggle-group" id="sedToggleGroup">
+                <div class="toggle-switch">
+                  <input type="checkbox" id="fSedVar" onchange="onToggle('sed')" />
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </div>
+                <span class="toggle-label" id="sedLabel">Kullanılmıyor</span>
+              </label>
+            </div>
+          </div>
+          <div id="sedAjanlarDiv" style="display:none; margin-top:4px;">
+            <div class="dynamic-list" id="sedAjanList"></div>
+            <button type="button" class="btn-add-item" onclick="ajanEkle('sed')">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              Sedasyon ajan ekle
+            </button>
+          </div>
+
+          <!-- Beslenme + Diürez + IR -->
+          <div class="form-row" style="margin-top:10px; grid-template-columns:1fr 1fr 1fr;">
+            <div class="form-group">
+              <label class="form-label" for="fBeslenme">Beslenme</label>
+              <select class="form-select" id="fBeslenme">
+                <option>Yok</option>
+                <option>Enteral</option>
+                <option>Parenteral</option>
+                <option>Enteral+Parenteral</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="fDiurez">Diürez</label>
+              <input class="form-input" type="text" id="fDiurez"
+                     placeholder="örn. 800 ml/gün" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="fIrPupil">IR / Pupil</label>
+              <select class="form-select" id="fIrPupil">
+                <option value="">—</option>
+                <option>Bilateral +/+</option>
+                <option>Sağ+ Sol-</option>
+                <option>Sağ- Sol+</option>
+                <option>Bilateral -/-</option>
+                <option>Değerlendirilemedi</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- VASKÜLER ERİŞİM & RENAL TAKİP -->
+        <div class="form-section">
+          <div class="form-section-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
+            Vasküler Erişim &amp; Renal Takip
+          </div>
+
+          <!-- CVP -->
+          <div class="form-row" style="grid-template-columns:auto 1fr; align-items:center; gap:10px;">
+            <div class="form-group" style="margin:0;">
+              <label class="form-label">CVP (Santral Venöz Kateter)</label>
+              <label class="toggle-group" id="cvpToggleGroup" style="margin-top:4px;">
+                <div class="toggle-switch">
+                  <input type="checkbox" id="fCvpVar" onchange="vaskulerToggle('cvp')" />
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </div>
+                <span class="toggle-label" id="cvpLabel">Yok</span>
+              </label>
+            </div>
+            <div class="form-group" id="cvpYerDiv" style="display:none; margin:0;">
+              <label class="form-label" for="fCvpYer">Yeri</label>
+              <select class="form-select" id="fCvpYer">
+                <option value="">— Seçin —</option>
+                <option>SC (Subklavyen)</option>
+                <option>İJVC (İnternal Juguler)</option>
+                <option>Femoral</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Diyaliz Kateteri -->
+          <div class="form-row" style="grid-template-columns:auto 1fr; align-items:center; gap:10px; margin-top:10px;">
+            <div class="form-group" style="margin:0;">
+              <label class="form-label">Diyaliz Kateteri</label>
+              <label class="toggle-group" id="diyalizKatToggleGroup" style="margin-top:4px;">
+                <div class="toggle-switch">
+                  <input type="checkbox" id="fDiyalizKatVar" onchange="vaskulerToggle('diyalizKat')" />
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </div>
+                <span class="toggle-label" id="diyalizKatLabel">Yok</span>
+              </label>
+            </div>
+            <div class="form-group" id="diyalizKatYerDiv" style="display:none; margin:0;">
+              <label class="form-label" for="fDiyalizKatYer">Yeri</label>
+              <select class="form-select" id="fDiyalizKatYer">
+                <option value="">— Seçin —</option>
+                <option>SC (Subklavyen)</option>
+                <option>İJVC (İnternal Juguler)</option>
+                <option>Femoral</option>
+                <option>Fistül</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Diyaliz -->
+          <div class="form-row" style="margin-top:10px;">
+            <div class="form-group" style="grid-column:1/-1;">
+              <label class="form-label">Diyaliz</label>
+              <label class="toggle-group" id="diyalizToggleGroup" style="margin-top:4px;">
+                <div class="toggle-switch">
+                  <input type="checkbox" id="fDiyalizVar" onchange="vaskulerToggle('diyaliz')" />
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </div>
+                <span class="toggle-label" id="diyalizLabel">Almıyor</span>
+              </label>
+            </div>
+          </div>
+          <div id="diyalizGunleriDiv" style="display:none; margin-top:6px;">
+            <label class="form-label" style="margin-bottom:6px;">Diyaliz Günleri</label>
+            <div style="display:flex; flex-wrap:wrap; gap:8px;" id="fDiyalizGunleriGroup">
+              <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-size:.82rem;"><input type="checkbox" value="Pzt"> Pzt</label>
+              <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-size:.82rem;"><input type="checkbox" value="Sal"> Sal</label>
+              <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-size:.82rem;"><input type="checkbox" value="Çrş"> Çrş</label>
+              <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-size:.82rem;"><input type="checkbox" value="Prş"> Prş</label>
+              <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-size:.82rem;"><input type="checkbox" value="Cum"> Cum</label>
+              <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-size:.82rem;"><input type="checkbox" value="Cmt"> Cmt</label>
+              <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-size:.82rem;"><input type="checkbox" value="Paz"> Paz</label>
+            </div>
+          </div>
+
+          <!-- CRRT -->
+          <div class="form-row" style="margin-top:10px; align-items:center;">
+            <div class="form-group">
+              <label class="form-label">CRRT</label>
+              <label class="toggle-group" id="crrtToggleGroup" style="margin-top:4px;">
+                <div class="toggle-switch">
+                  <input type="checkbox" id="fCrrtVar" onchange="vaskulerToggle('crrt')" />
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </div>
+                <span class="toggle-label" id="crrtLabel">Almıyor</span>
+              </label>
+            </div>
+            <div class="form-group" id="crrtBaslangicDiv" style="display:none;">
+              <label class="form-label" for="fCrrtBaslangic">Başlangıç Tarihi</label>
+              <input class="form-input" type="date" id="fCrrtBaslangic" />
+            </div>
+          </div>
+        </div>
+
+        <!-- KABUL EPİKRİZİ -->
+        <div class="form-section">
+          <div class="form-section-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+            </svg>
+            Kabul Epikrizi
+          </div>
+          <div class="form-row single">
+            <div class="form-group">
+              <textarea class="form-textarea kabul-epikriz-textarea" id="fKabulEpikrizi"
+                        placeholder="Hastanın YB'ye kabulündeki durum özeti…" rows="4"></textarea>
+            </div>
+          </div>
+        </div>
+
+        <!-- PLANLANAN İŞLEMLER -->
+        <div class="form-section">
+          <div class="form-section-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2"/>
+              <line x1="16" y1="2" x2="16" y2="6"/>
+              <line x1="8" y1="2" x2="8" y2="6"/>
+              <line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+            Planlanan İşlemler
+          </div>
+          <div class="dynamic-list" id="islemList"></div>
+          <button type="button" class="btn-add-item" onclick="islemEkle()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            İşlem ekle
+          </button>
+        </div>
+
+        <!-- KÜLTÜR & ANTİBİYOTİK TAKİBİ -->
+        <div class="form-section">
+          <div class="form-section-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 2v20M15 2v20M2 9h20M2 15h20"/>
+            </svg>
+            Kültür &amp; Antibiyotik Takibi
+          </div>
+          <div class="dynamic-list" id="kulturList"></div>
+          <button type="button" class="btn-add-item" onclick="kulturEkle()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Kültür ekle
+          </button>
+        </div>
+
+        <!-- GÖRÜNTÜLEME / TEKİK -->
+        <div class="form-section">
+          <div class="form-section-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            Görüntüleme / Tetkik Takibi
+          </div>
+          <div class="dynamic-list" id="tetkikList"></div>
+          <button type="button" class="btn-add-item" onclick="tetkikEkle()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Tetkik ekle
+          </button>
+        </div>
+
+        <!-- GENEL NOT -->
+        <div class="form-section">
+          <div class="form-section-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+            Genel Not
+          </div>
+          <div class="form-row single">
+            <div class="form-group">
+              <textarea class="form-textarea" id="fGenelNot"
+                        placeholder="Ek notlar…" rows="2"></textarea>
+            </div>
+          </div>
+        </div>
+
+      </form>
+    </div>
+
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="modalKapat('hastaModal')">İptal</button>
+      <button type="submit" form="hastaForm" class="btn btn-primary" id="btnKaydet">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        Kaydet
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ HASTA DETAY MODAL ══════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="detayModal" onclick="modalDisiTiklandi(event,'detayModal')">
+  <div class="modal detay-modal" role="dialog" aria-modal="true" aria-labelledby="detayModalTitle">
+    <div class="modal-header">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+      </svg>
+      <h2 id="detayModalTitle">Hasta Detayı</h2>
+      <button class="modal-close" onclick="modalKapat('detayModal')" aria-label="Kapat">✕</button>
+    </div>
+    <div class="modal-body" id="detayModalBody"></div>
+    <div class="modal-footer" id="detayModalFooter"></div>
+  </div>
+</div>
+
+<!-- ══ HASTA ÇIKIŞ MODAL ══════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="cikisModal" onclick="modalDisiTiklandi(event,'cikisModal')">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cikisModalTitle">
+    <div class="modal-header">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+      </svg>
+      <h2 id="cikisModalTitle">Hasta Çıkış İşlemi</h2>
+      <button class="modal-close" onclick="modalKapat('cikisModal')" aria-label="Kapat">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="cikisForm" onsubmit="cikisKaydet(event)">
+        <input type="hidden" id="cikisHastaId" />
+        
+        <div class="form-group">
+          <label class="form-label" for="cikisTuru">Çıkış Türü</label>
+          <select class="form-select" id="cikisTuru" onchange="cikisTuruDegisti()" required>
+            <option value="">— Seçin —</option>
+            <option value="taburcu">Eve Taburcu</option>
+            <option value="servis">Servise Çıktı</option>
+            <option value="exitus">Exitus</option>
+            <option value="sevk">Diğer YB'ye Sevk</option>
+            <option value="devir">Kurum İçi Ünite Devri</option>
+          </select>
+        </div>
+
+        <!-- Servise Çıktı Ek Alanlar -->
+        <div id="cikisServisDiv" style="display:none; margin-top:10px;">
+          <div class="form-group">
+            <label class="form-label" for="cikisServisSecim">Servis Seçimi</label>
+            <select class="form-select" id="cikisServisSecim" onchange="cikisServisDigerKontrol()">
+              <option value="Göğüs Hastalıkları">Göğüs Hastalıkları</option>
+              <option value="Dahiliye">Dahiliye</option>
+              <option value="Enfeksiyon Hastalıkları">Enfeksiyon Hastalıkları</option>
+              <option value="Palyatif Bakım">Palyatif Bakım</option>
+              <option value="Diger">Diğer...</option>
+            </select>
+          </div>
+          <div class="form-group" id="cikisServisDigerDiv" style="display:none; margin-top:10px;">
+            <label class="form-label" for="cikisServisDiger">Servis Adı</label>
+            <input class="form-input" type="text" id="cikisServisDiger" placeholder="Servis yazın..." />
+          </div>
+        </div>
+
+        <!-- Exitus Ek Alanlar -->
+        <div id="cikisExitusDiv" style="display:none; margin-top:10px;">
+          <div class="form-group">
+            <label class="form-label" for="cikisExitusTarih">Exitus Tarihi ve Saati</label>
+            <input class="form-input" type="datetime-local" id="cikisExitusTarih" />
+          </div>
+        </div>
+
+        <!-- Sevk Ek Alanlar -->
+        <div id="cikisSevkDiv" style="display:none; margin-top:10px;">
+          <div class="form-group">
+            <label class="form-label" for="cikisSevkKurum">Sevk Edilen Kurum</label>
+            <input class="form-input" type="text" id="cikisSevkKurum" placeholder="Hastane adı..." />
+          </div>
+        </div>
+
+        <!-- Devir Ek Alanlar -->
+        <div id="cikisDevirDiv" style="display:none; margin-top:10px;">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="cikisDevirUnite">Hedef Ünite</label>
+              <select class="form-select" id="cikisDevirUnite" onchange="cikisDevirUniteSecildi()">
+                <!-- JS ile doldurulur -->
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cikisDevirYatak">Hedef Yatak</label>
+              <select class="form-select" id="cikisDevirYatak">
+                <option value="">— Önce ünite seçin —</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="modalKapat('cikisModal')">İptal</button>
+      <button type="submit" form="cikisForm" class="btn btn-primary">Onayla</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ TOAST ══════════════════════════════════════════════════════════════════ -->
+<div id="toast-container" aria-live="polite"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
