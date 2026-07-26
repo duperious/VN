@@ -35,11 +35,21 @@ let doluYataklar = [];  // aktif ünitedeki dolu yatak numaraları
 // ════════════════════════════════════════════════════════════════════════════
 
 async function apiFetch(path, opts = {}) {
+  const token = localStorage.getItem("vizit_token");
+  const headers = { "Content-Type": "application/json", ...opts.headers };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
   try {
     const res = await fetch(`${API}${path}`, {
-      headers: { "Content-Type": "application/json", ...opts.headers },
+      headers,
       ...opts,
     });
+    if (res.status === 401 && path !== "/api/auth/login") {
+      localStorage.removeItem("vizit_token");
+      oturumKapatArayuzu();
+      throw new Error("Oturum süresi doldu, tekrar giriş yapın.");
+    }
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
       throw new Error(err.detail || `HTTP ${res.status}`);
@@ -47,8 +57,92 @@ async function apiFetch(path, opts = {}) {
     if (res.status === 204) return null;
     return res.json();
   } catch (e) {
-    toast("Hata: " + e.message, "error");
+    if (path !== "/api/auth/login" && !path.startsWith("/api/auth/me")) {
+      toast("Hata: " + e.message, "error");
+    }
     throw e;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── GİRİŞ / ÇIKIŞ YÖNETİMİ
+// ════════════════════════════════════════════════════════════════════════════
+
+async function girisYap(e) {
+  if (e) e.preventDefault();
+  const uEl = document.getElementById("lKullaniciAdi");
+  const pEl = document.getElementById("lSifre");
+  const errEl = document.getElementById("loginError");
+  const btnEl = document.getElementById("btnLoginSubmit");
+
+  errEl.style.display = "none";
+  btnEl.disabled = true;
+  btnEl.textContent = "Giriş Yapılıyor…";
+
+  try {
+    const res = await apiFetch("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({
+        kullanici_adi: uEl.value.trim(),
+        sifre: pEl.value
+      })
+    });
+    if (res && res.access_token) {
+      localStorage.setItem("vizit_token", res.access_token);
+      pEl.value = "";
+      oturumAcArayuzu();
+      toast("Başarıyla giriş yapıldı.", "success");
+      await hastaListesiYukle();
+      await fetchDoluYataklar(aktifUnite);
+    }
+  } catch (err) {
+    errEl.textContent = err.message || "Kullanıcı adı veya şifre hatalı.";
+    errEl.style.display = "block";
+  } finally {
+    btnEl.disabled = false;
+    btnEl.textContent = "Giriş Yap";
+  }
+}
+
+async function cikisYap() {
+  try {
+    await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+  } finally {
+    localStorage.removeItem("vizit_token");
+    oturumKapatArayuzu();
+    toast("Çıkış yapıldı.", "info");
+  }
+}
+
+function oturumAcArayuzu() {
+  modalKapat("loginModal");
+  const logoutBtn = document.getElementById("btnLogout");
+  if (logoutBtn) logoutBtn.style.display = "inline-flex";
+}
+
+function oturumKapatArayuzu() {
+  modalAc("loginModal");
+  const logoutBtn = document.getElementById("btnLogout");
+  if (logoutBtn) logoutBtn.style.display = "none";
+  tumHastalar = [];
+  gosterilen = [];
+  renderHastalar();
+}
+
+async function oturumKontrol() {
+  const token = localStorage.getItem("vizit_token");
+  if (!token) {
+    oturumKapatArayuzu();
+    return false;
+  }
+  try {
+    await apiFetch("/api/auth/me");
+    oturumAcArayuzu();
+    return true;
+  } catch (e) {
+    localStorage.removeItem("vizit_token");
+    oturumKapatArayuzu();
+    return false;
   }
 }
 
@@ -274,7 +368,11 @@ function renderKart(h) {
   if (klDurum.hava_yolu || klDurum.vent_var) ikonlar += `<span class="durum-ikon vent">🫁 ${klDurum.hava_yolu === "Entübe/Trakeostomili" ? "ENT" : klDurum.hava_yolu === "Entübe değil" ? "NONENT" : "VENT"}</span>`;
   if (klDurum.inot_var)  ikonlar += `<span class="durum-ikon inot">💉 İNOT</span>`;
   if (klDurum.sed_var)   ikonlar += `<span class="durum-ikon sed">💊 SED</span>`;
-  if (klDurum.crrt_var)  ikonlar += `<span class="durum-ikon" style="background:rgba(14,165,233,.18);color:#0ea5e9;border-color:#0ea5e9">CRRT</span>`;
+  if (klDurum.crrt_var) {
+    const crrtGun = kacGundurKullaniliyor(klDurum.crrt_baslangic);
+    const crrtTipi = klDurum.crrt_tipi ? ` (${klDurum.crrt_tipi})` : "";
+    ikonlar += `<span class="durum-ikon" style="background:rgba(14,165,233,.18);color:#0ea5e9;border-color:#0ea5e9" title="CRRT${crrtTipi}${crrtGun ? ' — ' + crrtGun : ''}">CRRT${crrtTipi}</span>`;
+  }
   if (yaklasan)          ikonlar += `<span class="durum-ikon islem">⚠ İŞLEM</span>`;
   if (isTaburcu)         ikonlar += `<span class="durum-ikon taburcu">✓ TABURCU</span>`;
 
@@ -306,14 +404,22 @@ function renderKart(h) {
       kulturBadge += `<div class="yaklasan-badge" style="background:rgba(245,158,11,.12);border-color:#f59e0b;color:#d97706">🧫 ${escHtml(bTxt)} Kx. Sonuç Bekleniyor</div>`;
     }
     
-    // Antibiyotikler
-    const aktifAbler = h.kultur_takibi.filter(k => k.antibiyotik_adi);
-    if (aktifAbler.length) {
-      const abTxt = aktifAbler.map(k => {
-         const gunStr = kacGundurKullaniliyor(k.antibiyotik_baslangic);
-         return gunStr ? `${escHtml(k.antibiyotik_adi)} (${gunStr})` : escHtml(k.antibiyotik_adi);
-      }).join(", ");
-      kulturBadge += `<div class="yaklasan-badge" style="background:rgba(16,185,129,.12);border-color:#10b981;color:#059669">💊 AB: ${abTxt}</div>`;
+    // Antibiyotikler (Kültüre bağlı olanlar - Geriye dönük uyum)
+    const aktifKulturAbler = (h.kultur_takibi || []).filter(k => k.antibiyotik_adi);
+    // Bağımsız antibiyotikler
+    const aktifAbler = (h.antibiyotikler || []).filter(a => a.ad);
+    
+    if (aktifKulturAbler.length || aktifAbler.length) {
+      const abList = [];
+      aktifKulturAbler.forEach(k => {
+        const gunStr = kacGundurKullaniliyor(k.antibiyotik_baslangic);
+        abList.push(gunStr ? `${escHtml(k.antibiyotik_adi)} (${gunStr})` : escHtml(k.antibiyotik_adi));
+      });
+      aktifAbler.forEach(a => {
+        const gunStr = kacGundurKullaniliyor(a.baslangic_tarihi);
+        abList.push(gunStr ? `${escHtml(a.ad)} (${gunStr})` : escHtml(a.ad));
+      });
+      kulturBadge += `<div class="yaklasan-badge" style="background:rgba(16,185,129,.12);border-color:#10b981;color:#059669">💊 AB: ${abList.join(", ")}</div>`;
     }
   }
 
@@ -491,6 +597,7 @@ function formTemizle() {
   document.getElementById("islemList").innerHTML  = "";
   document.getElementById("tetkikList").innerHTML = "";
   document.getElementById("kulturList").innerHTML = "";
+  document.getElementById("antibiyotikList").innerHTML = "";
   document.getElementById("inotAjanList").innerHTML = "";
   document.getElementById("sedAjanList").innerHTML  = "";
 }
@@ -573,6 +680,9 @@ function formDoldur(h) {
   // Kültürler
   (h.kultur_takibi || []).forEach(k => kulturEkle(k));
 
+  // Bağımsız Antibiyotikler
+  (h.antibiyotikler || []).forEach(a => antibiyotikEkle(a));
+
   // Tetkikler
   (h.goruntuleme_tetkik || []).forEach(t => tetkikEkle(t));
 }
@@ -607,7 +717,7 @@ function vaskulerToggle(tip) {
     cvp:       { cb:"fCvpVar",       lbl:"cvpLabel",       grp:"cvpToggleGroup",       on:"Var",      off:"Yok",      div:"cvpYerDiv" },
     diyalizKat:{ cb:"fDiyalizKatVar",lbl:"diyalizKatLabel",grp:"diyalizKatToggleGroup",on:"Var",      off:"Yok",      div:"diyalizKatYerDiv" },
     diyaliz:   { cb:"fDiyalizVar",   lbl:"diyalizLabel",   grp:"diyalizToggleGroup",   on:"Alıyor",  off:"Almıyor",  div:"diyalizGunleriDiv" },
-    crrt:      { cb:"fCrrtVar",      lbl:"crrtLabel",      grp:"crrtToggleGroup",      on:"Alıyor",  off:"Almıyor",  div:"crrtBaslangicDiv" },
+    crrt:      { cb:"fCrrtVar",      lbl:"crrtLabel",      grp:"crrtToggleGroup",      on:"Alıyor",  off:"Almıyor",  div:"crrtDetayDiv" },
   };
   const m = map[tip]; if (!m) return;
   const cb  = document.getElementById(m.cb);
@@ -688,6 +798,24 @@ function tetkikEkle(data = null) {
            style="width:140px;" data-role="tetkik-tarih" />
     <input class="form-input" type="text" placeholder="Tetkik adı ve sonucu"
            value="${escHtml(data?.icerik || "")}" style="flex:1;" data-role="tetkik-icerik" />
+    <button type="button" class="btn-remove-item" onclick="this.parentElement.remove()">✕</button>`;
+  liste.appendChild(div);
+}
+
+// ── Dinamik liste: Bağımsız Antibiyotik
+function antibiyotikEkle(data = null) {
+  const liste = document.getElementById("antibiyotikList");
+  const div = document.createElement("div");
+  div.className = "dynamic-list-item";
+  div.innerHTML = `
+    <input class="form-input" type="text" placeholder="Antibiyotik adı"
+           value="${escHtml(data?.ad || "")}" style="flex:1;" data-role="ab-ad" />
+    <input class="form-input" type="text" placeholder="Doz"
+           value="${escHtml(data?.doz || "")}" style="width:100px;" data-role="ab-doz" />
+    <input class="form-input" type="date" value="${escHtml(data?.baslangic_tarihi || bugunIso())}"
+           style="width:130px;" data-role="ab-tarih" />
+    <input class="form-input" type="text" placeholder="İlişkili Kx (Opsiyonel)"
+           value="${escHtml(data?.ilişkili_kultur || "")}" style="width:120px;" data-role="ab-kx" />
     <button type="button" class="btn-remove-item" onclick="this.parentElement.remove()">✕</button>`;
   liste.appendChild(div);
 }
@@ -806,6 +934,16 @@ async function hastaKaydet(e) {
     if (tur) kulturTakibi.push({ tur, tarih, sonuc, antibiyotik_adi: abAdi, antibiyotik_baslangic: abTarih });
   });
 
+  // Bağımsız Antibiyotikler
+  const antibiyotikler = [];
+  document.getElementById("antibiyotikList").querySelectorAll(".dynamic-list-item").forEach(el => {
+    const ad = el.querySelector('[data-role="ab-ad"]')?.value?.trim();
+    const doz = el.querySelector('[data-role="ab-doz"]')?.value?.trim();
+    const baslangic = el.querySelector('[data-role="ab-tarih"]')?.value || "";
+    const kx = el.querySelector('[data-role="ab-kx"]')?.value?.trim();
+    if (ad) antibiyotikler.push({ ad, doz, baslangic_tarihi: baslangic, ilişkili_kultur: kx });
+  });
+
   const payload = {
     unite,
     yatak_no: String(yatakNo),
@@ -835,10 +973,12 @@ async function hastaKaydet(e) {
       })(),
       crrt_var: document.getElementById("fCrrtVar").checked,
       crrt_baslangic: document.getElementById("fCrrtBaslangic")?.value || "",
+      crrt_tipi: document.getElementById("fCrrtTipi")?.value || "",
     },
     planlanan_islemler: planlananIslemler,
     goruntuleme_tetkik: goruntulemeTetkik,
     kultur_takibi: kulturTakibi,
+    antibiyotikler: antibiyotikler,
     genel_not: document.getElementById("fGenelNot").value.trim(),
     durum: "aktif",
   };
@@ -960,17 +1100,40 @@ async function hastaDetayAc(id) {
         <div class="kd-panel ${klDurum.crrt_var ? 'aktif-inot' : ''}">
           <div class="kd-panel-label">🔄 CRRT</div>
           ${klDurum.crrt_var
-            ? `<div class="kd-panel-value inot-v">Alıyor${klDurum.crrt_baslangic ? '<br><small style="font-weight:normal;opacity:.9">Başlangıç: ' + escHtml(klDurum.crrt_baslangic) + '</small>' : ''}</div>`
+            ? `<div class="kd-panel-value inot-v">Alıyor${klDurum.crrt_tipi ? ' (' + escHtml(klDurum.crrt_tipi) + ')' : ''}
+               ${klDurum.crrt_baslangic ? '<br><small style="font-weight:normal;opacity:.9">Başlangıç: ' + escHtml(klDurum.crrt_baslangic) + (kacGundurKullaniliyor(klDurum.crrt_baslangic) ? ' — ' + kacGundurKullaniliyor(klDurum.crrt_baslangic) : '') + '</small>' : ''}</div>`
             : `<div class="kd-panel-value bos">—</div>`}
         </div>
       </div>
     </div>`;
-    </div>`;
 
   // ── Kültür & Antibiyotik Takibi ─────────────────────────────────────────
   let kulturHtml = "";
-  if (hasta.kultur_takibi && hasta.kultur_takibi.length) {
-    const kStr = hasta.kultur_takibi.map(k => {
+  
+  // Antibiyotik özeti (Bağımsız + Kültürle İlişkili)
+  const allAb = [];
+  (hasta.antibiyotikler || []).forEach(a => {
+    const gunStr = kacGundurKullaniliyor(a.baslangic_tarihi);
+    allAb.push(`<div style="padding:6px; background:rgba(16,185,129,0.08); border-radius:6px; margin-bottom:6px; border:1px solid rgba(16,185,129,0.2);">
+      <strong>💊 ${escHtml(a.ad)}</strong> ${a.doz ? `(${escHtml(a.doz)})` : ""} 
+      <span style="font-size:0.8rem; color:var(--clr-text-muted); float:right;">${gunStr ? gunStr : formatTarihKisa(a.baslangic_tarihi)}</span>
+      ${a.ilişkili_kultur ? `<br><small style="color:var(--clr-text-dim)">İlişkili Kx: ${escHtml(a.ilişkili_kultur)}</small>` : ""}
+    </div>`);
+  });
+  
+  (hasta.kultur_takibi || []).filter(k => k.antibiyotik_adi).forEach(k => {
+    const gunStr = kacGundurKullaniliyor(k.antibiyotik_baslangic);
+    allAb.push(`<div style="padding:6px; background:rgba(16,185,129,0.08); border-radius:6px; margin-bottom:6px; border:1px solid rgba(16,185,129,0.2);">
+      <strong>💊 ${escHtml(k.antibiyotik_adi)}</strong> 
+      <span style="font-size:0.8rem; color:var(--clr-text-muted); float:right;">${gunStr ? gunStr : formatTarihKisa(k.antibiyotik_baslangic)}</span>
+      <br><small style="color:var(--clr-text-dim)">Kültürle ilişkili: ${escHtml(k.tur)} (${formatTarihKisa(k.tarih)})</small>
+    </div>`);
+  });
+
+  const abSection = allAb.length ? `<div style="margin-bottom:12px;">${allAb.join("")}</div>` : "";
+
+  if ((hasta.kultur_takibi && hasta.kultur_takibi.length) || allAb.length) {
+    const kStr = (hasta.kultur_takibi || []).map(k => {
       let r = `<div style="padding:6px; background:var(--clr-bg-alt); border-radius:6px; margin-bottom:6px; border:1px solid var(--clr-border);">`;
       r += `<div style="display:flex; justify-content:space-between; align-items:center;">`;
       r += `<strong>🧫 ${escHtml(k.tur)} Kültürü</strong> <span style="font-size:0.8rem; color:var(--clr-text-muted);">${formatTarih(k.tarih)}</span>`;
@@ -989,8 +1152,8 @@ async function hastaDetayAc(id) {
     }).join("");
     kulturHtml = `
       <div class="detay-section" style="margin-top:16px;">
-        <div class="detay-section-title">🧫 Kültür &amp; Antibiyotik Takibi</div>
-        <div style="margin-top:8px;">${kStr}</div>
+        <div class="detay-section-title">🧫 Kültür & Antibiyotik Takibi</div>
+        <div style="margin-top:8px;">${abSection}${kStr}</div>
       </div>`;
   }
 
@@ -1312,7 +1475,9 @@ async function exportPdf() {
   btn.disabled = true; btn.textContent = "Hazırlanıyor…";
   toast("PDF hazırlanıyor (Chromium)…", "info", 12000);
   try {
-    const res = await fetch(`${API}/api/export/pdf?durum=aktif&unite=${encodeURIComponent(aktifUnite)}`);
+    const token = localStorage.getItem("vizit_token");
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const res = await fetch(`${API}/api/export/pdf?durum=aktif&unite=${encodeURIComponent(aktifUnite)}`, { headers });
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "PDF hatası"); }
     const blob = await res.blob();
     const url  = URL.createObjectURL(blob);
@@ -1332,7 +1497,9 @@ async function exportPdf() {
 async function exportPdfTekHasta(id) {
   toast("PDF hazırlanıyor…", "info", 8000);
   try {
-    const res = await fetch(`${API}/api/export/pdf?hasta_ids=${id}`);
+    const token = localStorage.getItem("vizit_token");
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const res = await fetch(`${API}/api/export/pdf?hasta_ids=${id}`, { headers });
     if (!res.ok) throw new Error("PDF oluşturulamadı");
     const blob = await res.blob();
     const url  = URL.createObjectURL(blob);
@@ -1348,7 +1515,14 @@ async function exportPdfTekHasta(id) {
 // ════════════════════════════════════════════════════════════════════════════
 
 window.addEventListener("DOMContentLoaded", async () => {
-  await hastaListesiYukle();
-  await fetchDoluYataklar(aktifUnite);
-  setInterval(hastaListesiYukle, 60_000);
+  const isAuth = await oturumKontrol();
+  if (isAuth) {
+    await hastaListesiYukle();
+    await fetchDoluYataklar(aktifUnite);
+  }
+  setInterval(async () => {
+    if (localStorage.getItem("vizit_token")) {
+      await hastaListesiYukle();
+    }
+  }, 60_000);
 });

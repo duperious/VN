@@ -17,16 +17,23 @@ class PlanlananIslem(BaseModel):
 
 
 class GoruntulemeTetkik(BaseModel):
-    tarih: str
-    icerik: str
+    tarih: Optional[str] = ""
+    icerik: str = ""
 
 
 class Kultur(BaseModel):
-    tur: str                     # "Kan", "TAS", "İdrar", "Yara", vb.
-    tarih: str
-    sonuc: str                   # "Bekleniyor" veya serbest metin
-    antibiyotik_adi: str = ""
-    antibiyotik_baslangic: str = ""
+    tur: str = ""                     # "Kan", "TAS", "İdrar", "Yara", vb.
+    tarih: Optional[str] = ""
+    sonuc: Optional[str] = "Bekleniyor" # "Bekleniyor" veya serbest metin
+    antibiyotik_adi: Optional[str] = ""    # Geriye dönük uyum için kalabilir
+    antibiyotik_baslangic: Optional[str] = ""
+
+
+class Antibiyotik(BaseModel):
+    ad: str = ""
+    doz: Optional[str] = ""
+    baslangic_tarihi: Optional[str] = ""
+    ilişkili_kultur: Optional[str] = None
 
 
 class InotropAjan(BaseModel):
@@ -77,6 +84,7 @@ class KlinikDurum(BaseModel):
     diyaliz_gunleri: List[str] = Field(default_factory=list)  # ["Pzt","Çrş","Cum"] gibi
     crrt_var: bool = False
     crrt_baslangic: str = ""     # ISO date
+    crrt_tipi: str = ""          # "Heparinli" | "Heparinsiz" | "Sitrat"
 
 
 # ── Ana modeller ──────────────────────────────────────────────────────────────
@@ -91,6 +99,7 @@ class HastaBase(BaseModel):
     planlanan_islemler: Optional[List[PlanlananIslem]] = Field(default_factory=list)
     goruntuleme_tetkik: Optional[List[GoruntulemeTetkik]] = Field(default_factory=list)
     kultur_takibi: Optional[List[Kultur]] = Field(default_factory=list)
+    antibiyotikler: Optional[List[Antibiyotik]] = Field(default_factory=list)
     genel_not: Optional[str] = ""
     cikis_turu: Optional[str] = None
     cikis_detayi: Optional[str] = None
@@ -135,12 +144,15 @@ class Hasta(HastaBase):
         data = dict(row)
 
         # JSON alanlarını parse et
-        for field in ("planlanan_islemler", "goruntuleme_tetkik", "kultur_takibi"):
-            if isinstance(data.get(field), str):
+        for field in ("planlanan_islemler", "goruntuleme_tetkik", "kultur_takibi", "antibiyotikler"):
+            val = data.get(field)
+            if isinstance(val, str):
                 try:
-                    data[field] = json.loads(data[field])
+                    data[field] = json.loads(val)
                 except Exception:
                     data[field] = []
+            elif val is None:
+                data[field] = []
 
         # klinik_durum JSON parse
         kd_raw = data.get("klinik_durum", "{}")

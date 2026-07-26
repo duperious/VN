@@ -3,10 +3,20 @@ database.py — SQLite veritabanı bağlantısı ve şema oluşturma
 v2: ünite, kabul_epikrizi, klinik_durum alanları eklendi
 """
 
+import os
 import sqlite3
 from pathlib import Path
+from dotenv import load_dotenv
 
-DB_PATH = Path(__file__).parent / "vizit.db"
+# Load env variables from root .env or current dir
+load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv(Path(__file__).parent / ".env")
+
+db_env = os.getenv("DB_PATH")
+if db_env:
+    DB_PATH = Path(db_env)
+else:
+    DB_PATH = Path(__file__).parent / "vizit.db"
 
 # ── Sabit: Ünite konfigürasyonu ───────────────────────────────────────────────
 UNITE_KONFIG = {
@@ -20,6 +30,7 @@ UNITE_LISTESI = list(UNITE_KONFIG.keys())
 
 
 def get_connection() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -60,6 +71,7 @@ def init_db():
         "kabul_epikrizi": "TEXT DEFAULT ''",
         "klinik_durum":   "TEXT DEFAULT '{}'",
         "kultur_takibi":  "TEXT DEFAULT '[]'",
+        "antibiyotikler": "TEXT DEFAULT '[]'",
         "cikis_turu":     "TEXT",
         "cikis_detayi":   "TEXT",
     }

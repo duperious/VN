@@ -254,7 +254,7 @@ VIZIT_TEMPLATE = """
         <div class="kd-alan">
           <div class="kd-label">CRRT</div>
           {% if kd.crrt_var %}
-            <div class="kd-value inot-renk">Alıyor{% if kd.crrt_baslangic %} ({{ kd.crrt_baslangic }}){% endif %}</div>
+            <div class="kd-value inot-renk">Alıyor{% if kd.crrt_tipi %} ({{ kd.crrt_tipi }}){% endif %}{% if kd.crrt_baslangic %} <br><span style="font-size:10px;">Bşl: {{ kd.crrt_baslangic }}{% if kd.crrt_gun %} — {{ kd.crrt_gun }}{% endif %}</span>{% endif %}</div>
           {% else %}
             <div class="kd-value bos">—</div>
           {% endif %}
@@ -285,27 +285,33 @@ VIZIT_TEMPLATE = """
     {% endif %}
 
     <!-- Kültür & Antibiyotik Takibi -->
-    {% if hasta.kultur_takibi %}
+    {% if hasta.antibiyotikler or hasta.kultur_takibi %}
     <div class="ek-bolum">
-      <div class="ek-baslik">Kültür &amp; Antibiyotik Takibi</div>
+      <div class="ek-baslik">Kültür & Antibiyotik Takibi</div>
+      
+      <!-- Bağımsız Antibiyotikler -->
+      {% for a in hasta.antibiyotikler %}
+      <div class="ek-satir" style="padding-bottom:2px;">
+        <span style="color:#059669;"><strong>💊 AB: {{ a.ad }}</strong> {% if a.doz %}({{ a.doz }}){% endif %}</span>
+        <span class="ek-tarih" style="margin-left:auto;">{{ a.baslangic_tarihi }} {% if a.ab_gun %}({{ a.ab_gun }}){% endif %}</span>
+      </div>
+      {% endfor %}
+
       {% for k in hasta.kultur_takibi %}
-      <div class="ek-satir" style="align-items:flex-start; flex-direction:column; padding-bottom:4px; border-bottom:1px solid #eee;">
-        <div style="display:flex; width:100%; justify-content:space-between; margin-bottom:2px;">
-          <span><strong>🧫 {{ k.tur }} Kültürü</strong> <span class="ek-tarih" style="width:auto; margin-left:8px;">{{ k.tarih or '—' }}</span></span>
+      <div class="ek-satir" style="align-items:flex-start; flex-direction:column; padding-bottom:4px; border-bottom:1px solid #eee; margin-top:2px;">
+        <div style="display:flex; width:100%; justify-content:space-between; margin-bottom:1px;">
+          <span><strong>🧫 {{ k.tur }} Kx.</strong> <span class="ek-tarih" style="width:auto; margin-left:8px;">{{ k.tarih or '—' }}</span></span>
         </div>
-        <div style="font-size:10px; margin-bottom:2px;">
+        <div style="font-size:8.5pt;">
           {% if not k.sonuc or k.sonuc == 'Bekleniyor' %}
             <span style="color:#d97706;">Sonuç Bekleniyor</span>
           {% else %}
-            <span><strong>Sonuç:</strong> {{ k.sonuc }}</span>
+            <span>Sonuç: {{ k.sonuc }}</span>
           {% endif %}
         </div>
         {% if k.antibiyotik_adi %}
-        <div style="font-size:10px; color:#059669; padding-top:2px;">
-          💊 AB: {{ k.antibiyotik_adi }}
-          {% if k.ab_gun %}
-            ({{ k.ab_gun }})
-          {% endif %}
+        <div style="font-size:8.5pt; color:#059669;">
+          💊 AB: {{ k.antibiyotik_adi }} {% if k.ab_gun %}({{ k.ab_gun }}){% endif %}
         </div>
         {% endif %}
       </div>
@@ -408,6 +414,24 @@ def _hazirla_hasta(h: dict) -> dict:
             except Exception:
                 pass
 
+    # Bağımsız antibiyotikler
+    abs_list = h.get("antibiyotikler") or []
+    if isinstance(abs_list, str):
+        try:
+            abs_list = json.loads(abs_list)
+        except Exception:
+            abs_list = []
+    
+    for a in abs_list:
+        if a.get("baslangic_tarihi"):
+            try:
+                ab_tarih = datetime.strptime(a["baslangic_tarihi"], "%Y-%m-%d").date()
+                fark = (bugun - ab_tarih).days
+                if fark >= 0:
+                    a["ab_gun"] = f"{fark + 1}. gün"
+            except Exception:
+                pass
+
     # klinik_durum
     kd_raw = h.get("klinik_durum") or "{}"
     if isinstance(kd_raw, str):
@@ -458,6 +482,16 @@ def _hazirla_hasta(h: dict) -> dict:
     kd.setdefault("diyaliz_gunleri", [])
     kd.setdefault("crrt_var", False)
     kd.setdefault("crrt_baslangic", "")
+    kd.setdefault("crrt_tipi", "")
+    
+    if kd.get("crrt_var") and kd.get("crrt_baslangic"):
+        try:
+            crrt_tarih = datetime.strptime(kd["crrt_baslangic"], "%Y-%m-%d").date()
+            fark = (bugun - crrt_tarih).days
+            if fark >= 0:
+                kd["crrt_gun"] = f"{fark + 1}. gün"
+        except Exception:
+            pass
 
     return {
         **h,
@@ -465,6 +499,7 @@ def _hazirla_hasta(h: dict) -> dict:
         "planlanan_islemler": islemler,
         "goruntuleme_tetkik": tetkikler,
         "kultur_takibi": kulturler,
+        "antibiyotikler": abs_list,
         "yaklasan_islem": yaklasan,
         "unite": h.get("unite", ""),
         "kabul_epikrizi": h.get("kabul_epikrizi", ""),
