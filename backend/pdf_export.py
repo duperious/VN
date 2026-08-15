@@ -9,7 +9,9 @@ from datetime import datetime
 from typing import List
 from jinja2 import Environment, BaseLoader
 
-from ilaclar import ajan_ozeti, vki_hesapla, vki_sinifi, kalori_ihtiyaci
+from ilaclar import (
+    ajan_ozeti, vki_hesapla, vki_sinifi, kalori_ihtiyaci, ENTUBE_DEGERLERI,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -178,8 +180,8 @@ VIZIT_TEMPLATE = """
     <div class="klinik-grid">
       <div class="kd-alan">
         <div class="kd-label">Solunum / Hava Yolu</div>
-        {% if kd.hava_yolu == 'Entübe/Trakeostomili' %}
-          <div class="kd-value vent-renk">Entübe/Trakeostomili<br><span style="font-weight:normal;color:#111827">{{ kd.entube_destek }}{% if kd.entube_destek == 'Mekanik ventilatöre bağlı' and kd.vent_mod %} — {{ kd.vent_mod }}{% endif %}</span></div>
+        {% if kd.hava_yolu in entube_degerleri %}
+          <div class="kd-value vent-renk">{{ kd.hava_yolu }}<br><span style="font-weight:normal;color:#111827">{{ kd.entube_destek }}{% if kd.entube_destek == 'Mekanik ventilatöre bağlı' and kd.vent_mod %} — {{ kd.vent_mod }}{% endif %}</span></div>
         {% elif kd.hava_yolu == 'Entübe değil' and kd.non_entube_destek %}
           <div class="kd-value vent-renk">Entübe Değil<br><span style="font-weight:normal;color:#111827">{{ kd.non_entube_destek | join(', ') }}</span></div>
         {% elif kd.vent_var %}
@@ -215,7 +217,7 @@ VIZIT_TEMPLATE = """
         <div class="kd-label">Sedasyon</div>
         {% if kd.sed_var and kd.sed_ajanlar %}
           {% for a in kd.sed_ajanlar %}
-            <div class="kd-value sed-renk">{{ a.ajan }}{% if a.doz %} {{ a.doz }}{% endif %}</div>
+            <div class="kd-value sed-renk">{{ a.ajan }}{% if a.hiz_cc_saat is not none %} — {{ a.hiz_cc_saat | sayi }} cc/h{% elif a.doz %} {{ a.doz }}{% endif %}</div>
           {% endfor %}
         {% elif kd.sed_var %}
           <div class="kd-value sed-renk">Kullanılıyor</div>
@@ -226,7 +228,7 @@ VIZIT_TEMPLATE = """
       <div class="kd-alan">
         <div class="kd-label">Beslenme</div>
         <div class="kd-value {% if not kd.beslenme or kd.beslenme == 'Yok' %}bos{% endif %}">
-          {{ kd.beslenme or '—' }}
+          {{ kd.beslenme or '—' }}{% if kd.beslenme_yollari %} ({{ kd.beslenme_yollari | join('/') }}){% endif %}
         </div>
         {% if hasta.kalori %}
           <div class="kd-alt">{{ hasta.kalori.min }}–{{ hasta.kalori.max }} kcal/gün</div>
@@ -243,7 +245,7 @@ VIZIT_TEMPLATE = """
     </div>
 
     <!-- Vasküler Erişim & Renal Takip -->
-    {% if kd.cvp_var or kd.diyaliz_kateter_var or kd.diyaliz_var or kd.crrt_var %}
+    {% if kd.cvp_var or kd.diyaliz_kateter_var or kd.diyaliz_var or kd.crrt_var or kd.bikarbonat_var %}
     <div class="ek-bolum" style="margin-top:4px;">
       <div class="ek-baslik">Vasküler Erişim &amp; Renal Takip</div>
       <div class="klinik-grid" style="grid-template-columns:1fr 1fr 1fr 1fr; margin-bottom:0; padding-bottom:0; border-bottom:none;">
@@ -277,6 +279,14 @@ VIZIT_TEMPLATE = """
           <div class="kd-label">CRRT</div>
           {% if kd.crrt_var %}
             <div class="kd-value inot-renk">Alıyor{% if kd.crrt_tipi %} ({{ kd.crrt_tipi }}){% endif %}{% if kd.crrt_baslangic %} <br><span style="font-size:10px;">Bşl: {{ kd.crrt_baslangic }}{% if kd.crrt_gun %} — {{ kd.crrt_gun }}{% endif %}</span>{% endif %}</div>
+          {% else %}
+            <div class="kd-value bos">—</div>
+          {% endif %}
+        </div>
+        <div class="kd-alan">
+          <div class="kd-label">Bikarbonat İnf.</div>
+          {% if kd.bikarbonat_var %}
+            <div class="kd-value inot-renk">Alıyor</div>
           {% else %}
             <div class="kd-value bos">—</div>
           {% endif %}
@@ -505,6 +515,8 @@ def _hazirla_hasta(h: dict) -> dict:
     kd.setdefault("crrt_var", False)
     kd.setdefault("crrt_baslangic", "")
     kd.setdefault("crrt_tipi", "")
+    kd.setdefault("bikarbonat_var", False)
+    kd.setdefault("beslenme_yollari", [])
     
     # İnotrop ajanlarını hazırlık + hız + hesaplanan doz olarak zenginleştir
     kilo = h.get("kilo")
@@ -559,6 +571,7 @@ def _html_olustur(hastalar: list, unite_filtre: str = "") -> str:
         hastalar=hazir,
         now=datetime.now().strftime("%d.%m.%Y %H:%M"),
         unite_filtre=unite_filtre,
+        entube_degerleri=ENTUBE_DEGERLERI,
     )
 
 

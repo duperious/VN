@@ -589,7 +589,18 @@ def export_pdf(
     hasta_ids: Optional[str] = Query(None),
     unite: Optional[str] = Query(None),
 ):
-    from pdf_export import uret_pdf
+    # WeasyPrint sistem kütüphanelerini (pango/glib) içe aktarımda arar; eksikse
+    # burada patlar. Ham 500 yerine ne yapılacağını söyleyen bir hata döndür.
+    try:
+        from pdf_export import uret_pdf
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "PDF motoru yüklenemedi: " + str(e) +
+                " — macOS'ta 'brew install pango', Linux'ta libpango/libgobject paketleri gerekir."
+            ),
+        )
 
     conn = get_connection()
     try:
@@ -622,7 +633,18 @@ def export_pdf(
             h["epikriz_notlari"] = [dict(e) for e in epikriz]
             hastalar.append(h)
 
-        pdf_bytes = uret_pdf(hastalar, unite or "")
+        try:
+            pdf_bytes = uret_pdf(hastalar, unite or "")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "PDF üretilemedi: " + str(e) +
+                    " — macOS'ta 'brew install pango' gerekebilir."
+                ),
+            )
 
         unite_str = f"_{unite}" if unite else ""
         return Response(

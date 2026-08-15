@@ -1045,6 +1045,16 @@ main {
 .inot-chip.dusuk,
 .inot-chip.yuksek   { background: var(--clr-vent-bg);    border-color: var(--clr-vent);    color: var(--clr-vent); }
 
+/* ── Sedasyon özeti (hasta kartı) ────────────────────────────────────────── */
+.sed-satiri {
+  display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
+  margin-top: 5px; font-size: 0.75rem; color: var(--clr-sed, #a855f7);
+}
+.sed-chip {
+  padding: 2px 7px; border-radius: 999px; font-size: 0.72rem; white-space: nowrap;
+  background: rgba(168,85,247,.12); border: 1px solid #a855f7; color: #a855f7;
+}
+
 /* ── İnotrop detayı (detay modalı) ───────────────────────────────────────── */
 .inot-detay-satir { padding: 3px 0; line-height: 1.35; }
 .inot-detay-satir + .inot-detay-satir { border-top: 1px dotted var(--clr-border); }

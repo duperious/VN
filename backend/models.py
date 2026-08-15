@@ -60,7 +60,9 @@ class KlinikDurum(BaseModel):
     Tüm alanlar opsiyonel — kademeli doldurmaya izin verir.
     """
     # Solunum / Hava Yolu
-    hava_yolu: str = ""          # "Entübe/Trakeostomili" | "Entübe değil"
+    # "Entübe" | "Trakeostomili" | "Entübe değil"
+    # (eski kayıtlarda tek seçenek olan "Entübe/Trakeostomili" de gelebilir)
+    hava_yolu: str = ""
     entube_destek: str = ""      # "Oda havası" | "Humidvent" | "T-tüp" | "Mekanik ventilatöre bağlı"
     non_entube_destek: List[str] = Field(default_factory=list) # ["Oda havasında", "Nazal kanül", "Basit maske", ...]
     
@@ -78,6 +80,8 @@ class KlinikDurum(BaseModel):
 
     # Beslenme
     beslenme: str = "Yok"        # Yok | Enteral | Parenteral | Enteral+Parenteral
+    # Enteral yolları — birden fazla olabilir (NG'den verilirken oral denenebiliyor)
+    beslenme_yollari: List[str] = Field(default_factory=list)  # ["NG", "Oral"] gibi
 
     # Diürez
     diurez: str = ""             # serbest metin, örn. "800 ml/gün"
@@ -97,6 +101,9 @@ class KlinikDurum(BaseModel):
     crrt_var: bool = False
     crrt_baslangic: str = ""     # ISO date
     crrt_tipi: str = ""          # "Heparinli" | "Heparinsiz" | "Sitrat"
+
+    # Derin asidozda verilen bikarbonat infüzyonu
+    bikarbonat_var: bool = False
 
 
 # ── Ana modeller ──────────────────────────────────────────────────────────────

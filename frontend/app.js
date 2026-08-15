@@ -21,15 +21,27 @@ const UNITE_LISTESI = Object.keys(UNITE_KONFIG);
 // DİKKAT: backend/ilaclar.py içindeki ILAC_TABLOSU ile birebir aynı olmalıdır.
 // Biri değişirse diğeri de değişmeli (PDF çıktısı backend tablosunu kullanır).
 // baz_miktar = x1 hazırlıkta hacim_cc içine konan miktar.
+// kisa: hasta kartında yer dar olduğu için kullanılan kısaltma
 const ILAC_TABLOSU = {
-  "Noradrenalin": { baz_miktar: 8,   hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 0.1,  max_doz: 4,    kilo_bazli: true  },
-  "Adrenalin":    { baz_miktar: 8,   hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 0.05, max_doz: 2,    kilo_bazli: true  },
-  "Dopamin":      { baz_miktar: 400, hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 3,    max_doz: 20,   kilo_bazli: true  },
-  "Dobutamin":    { baz_miktar: 500, hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 2,    max_doz: 20,   kilo_bazli: true  },
-  "Vazopressin":  { baz_miktar: 20,  hacim_cc: 100, miktar_birimi: "ünite", doz_birimi: "ünite/dk",  min_doz: 0.01, max_doz: 0.07, kilo_bazli: false },
+  "Noradrenalin": { kisa: "NA", baz_miktar: 8,   hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 0.1,  max_doz: 4,    kilo_bazli: true  },
+  "Adrenalin":    { kisa: "AD", baz_miktar: 8,   hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 0.05, max_doz: 2,    kilo_bazli: true  },
+  "Dopamin":      { kisa: "DP", baz_miktar: 400, hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 3,    max_doz: 20,   kilo_bazli: true  },
+  "Dobutamin":    { kisa: "DB", baz_miktar: 500, hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 2,    max_doz: 20,   kilo_bazli: true  },
+  "Vazopressin":  { kisa: "VP", baz_miktar: 20,  hacim_cc: 100, miktar_birimi: "ünite", doz_birimi: "ünite/dk",  min_doz: 0.01, max_doz: 0.07, kilo_bazli: false },
 };
 const ILAC_LISTESI = Object.keys(ILAC_TABLOSU);
 const CARPANLAR = [1, 2, 4];
+
+// Sedasyon/analjezi/nöromusküler bloker infüzyonları.
+// İnotroplardan farklı: doz aralığı hesaplanmaz, yalnızca infüzyon hızı (cc/h) tutulur.
+const SEDASYON_ILACLARI = [
+  "Midazolam", "Fentanyl", "Deksmedetomidin",
+  "Tiyopental", "Propofol", "Rokuronyum",
+];
+
+// Hava yolu: eski kayıtlarda "Entübe/Trakeostomili" tek seçenekti, artık ayrı seçiliyor.
+const ENTUBE_DEGERLERI = ["Entübe", "Trakeostomili", "Entübe/Trakeostomili"];
+const entubeMi = (v) => ENTUBE_DEGERLERI.includes(v);
 
 // ESPEN yoğun bakım: 25-30 kcal/kg/gün
 const KCAL_MIN_PER_KG = 25;
@@ -129,7 +141,7 @@ function inotOzeti(a, kilo) {
   const hacim  = sayi(a.hacim_cc) || bilgi.hacim_cc;
   const h = dozHesapla(a.ajan, miktar, hacim, a.hiz_cc_saat, kilo);
   return {
-    tabloda: true, ajan: a.ajan, carpan, miktar, hacim,
+    tabloda: true, ajan: a.ajan, kisa: bilgi.kisa, carpan, miktar, hacim,
     miktar_birimi: bilgi.miktar_birimi,
     hiz: sayi(a.hiz_cc_saat),
     doz: h.doz, doz_birimi: h.birim, durum: h.durum,
@@ -486,7 +498,12 @@ function renderKart(h) {
 
   // Rozetler
   let ikonlar = "";
-  if (klDurum.hava_yolu || klDurum.vent_var) ikonlar += `<span class="durum-ikon vent">🫁 ${klDurum.hava_yolu === "Entübe/Trakeostomili" ? "ENT" : klDurum.hava_yolu === "Entübe değil" ? "NONENT" : "VENT"}</span>`;
+  if (klDurum.hava_yolu || klDurum.vent_var) {
+    const hyKisa = klDurum.hava_yolu === "Trakeostomili" ? "TRAK"
+                 : entubeMi(klDurum.hava_yolu) ? "ENT"
+                 : klDurum.hava_yolu === "Entübe değil" ? "NONENT" : "VENT";
+    ikonlar += `<span class="durum-ikon vent">🫁 ${hyKisa}</span>`;
+  }
   if (klDurum.inot_var)  ikonlar += `<span class="durum-ikon inot">💉 İNOT</span>`;
   if (klDurum.sed_var)   ikonlar += `<span class="durum-ikon sed">💊 SED</span>`;
   if (klDurum.crrt_var) {
@@ -556,8 +573,8 @@ function renderKart(h) {
 
   // Klinik kısa bilgiler
   let klBilgi = [];
-  if (klDurum.hava_yolu === "Entübe/Trakeostomili") {
-    let s = "Entübe";
+  if (entubeMi(klDurum.hava_yolu)) {
+    let s = klDurum.hava_yolu === "Trakeostomili" ? "Trakeostomili" : "Entübe";
     if (klDurum.entube_destek === "Mekanik ventilatöre bağlı" && klDurum.vent_mod) s += ` — ${klDurum.vent_mod}`;
     else if (klDurum.entube_destek) s += ` — ${klDurum.entube_destek}`;
     klBilgi.push(`<span style="color:var(--clr-vent);font-size:.75rem">🫁 ${escHtml(s)}</span>`);
@@ -573,7 +590,11 @@ function renderKart(h) {
   } else if (klDurum.vent_var && klDurum.vent_mod) {
     klBilgi.push(`<span style="color:var(--clr-vent);font-size:.75rem">🫁 ${escHtml(klDurum.vent_mod)}</span>`);
   }
-  if (klDurum.beslenme && klDurum.beslenme !== "Yok") klBilgi.push(`<span style="color:var(--clr-text-muted);font-size:.75rem">🍽 ${escHtml(klDurum.beslenme)}</span>`);
+  if (klDurum.beslenme && klDurum.beslenme !== "Yok") {
+    const yollar = (klDurum.beslenme_yollari || []).length
+      ? ` (${klDurum.beslenme_yollari.join("/")})` : "";
+    klBilgi.push(`<span style="color:var(--clr-text-muted);font-size:.75rem">🍽 ${escHtml(klDurum.beslenme + yollar)}</span>`);
+  }
   if (klDurum.ir_pupil) klBilgi.push(`<span style="color:var(--clr-text-muted);font-size:.75rem">👁 ${escHtml(klDurum.ir_pupil)}</span>`);
   const klBilgiHtml = klBilgi.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:5px;">${klBilgi.join("")}</div>` : "";
 
@@ -586,7 +607,8 @@ function renderKart(h) {
       if (!o.tabloda) {
         return `<span class="inot-chip">${escHtml(o.ajan)}${o.metin ? " " + escHtml(o.metin) : ""}</span>`;
       }
-      const parca = [escHtml(o.ajan)];
+      // Kartta yer dar — kısaltma kullan (NA/AD/DP/DB/VP), tam adı title'da göster
+      const parca = [o.kisa];
       if (o.carpan > 1) parca.push(`x${o.carpan}`);
       if (o.hiz !== null) parca.push(`${dozYaz(o.hiz, 1)} cc/h`);
       const dozStr = o.doz !== null
@@ -599,6 +621,23 @@ function renderKart(h) {
     }).join("");
     inotHtml = `<div class="inot-satiri">💉 ${chipler}</div>`;
   }
+
+  // Sedasyon özeti — ilaç + infüzyon hızı
+  let sedHtml = "";
+  const sedAjanlari = (klDurum.sed_ajanlar || []).filter(a => a && a.ajan);
+  if (klDurum.sed_var && sedAjanlari.length) {
+    const chipler = sedAjanlari.map(a => {
+      const hiz = sayi(a.hiz_cc_saat);
+      const detay = hiz !== null ? ` ${dozYaz(hiz, 1)} cc/h` : (a.doz ? ` ${escHtml(a.doz)}` : "");
+      return `<span class="sed-chip">${escHtml(a.ajan)}${detay}</span>`;
+    }).join("");
+    sedHtml = `<div class="sed-satiri">💊 ${chipler}</div>`;
+  }
+
+  // Bikarbonat infüzyonu (derin asidoz)
+  const bikarbonatHtml = klDurum.bikarbonat_var
+    ? `<div class="yaklasan-badge" style="background:rgba(56,189,248,.12);border-color:#38bdf8;color:#38bdf8">🧪 Bikarbonat infüzyonu alıyor</div>`
+    : "";
 
   return `
     <div class="hasta-kart ${yaklasan && !isTaburcu ? "yaklasan-islem" : ""} ${isTaburcu ? "taburcu" : ""}"
@@ -615,6 +654,8 @@ function renderKart(h) {
       <div class="kart-body">
         ${klBilgiHtml}
         ${inotHtml}
+        ${sedHtml}
+        ${bikarbonatHtml}
         ${kulturBadge}
         ${notOnizleme}
         ${yakBadge}
@@ -731,7 +772,7 @@ function formTemizle() {
   document.querySelectorAll('#fNonEntubeDestekGroup input[type="checkbox"]').forEach(cb => cb.checked = false);
 
   // Vasküler erişim sıfırla
-  ["cvp","diyalizKat","diyaliz","crrt"].forEach(t => {
+  ["cvp","diyalizKat","diyaliz","crrt","bikarbonat"].forEach(t => {
     const cbId = t === "cvp" ? "fCvpVar" : t === "diyalizKat" ? "fDiyalizKatVar" : t === "diyaliz" ? "fDiyalizVar" : "fCrrtVar";
     const el = document.getElementById(cbId);
     if (el) el.checked = false;
@@ -745,6 +786,8 @@ function formTemizle() {
   document.getElementById("antibiyotikList").innerHTML = "";
   document.getElementById("inotAjanList").innerHTML = "";
   document.getElementById("sedAjanList").innerHTML  = "";
+  document.querySelectorAll('#fBeslenmeYollariGroup input[type="checkbox"]').forEach(cb => cb.checked = false);
+  beslenmeDegisti();
   antropometriGuncelle();
 }
 
@@ -760,10 +803,13 @@ function formDoldur(h) {
   const klDurum = h.klinik_durum || {};
 
   // Solunum / Hava Yolu
-  document.getElementById("fHavaYolu").value = klDurum.hava_yolu || "";
+  // Eski kayıtlardaki birleşik "Entübe/Trakeostomili" değeri artık seçenek
+  // listesinde yok; formda "Entübe" olarak göster.
+  const havaYolu = klDurum.hava_yolu === "Entübe/Trakeostomili" ? "Entübe" : (klDurum.hava_yolu || "");
+  document.getElementById("fHavaYolu").value = havaYolu;
   havaYoluDegisti();
-  
-  if (klDurum.hava_yolu === "Entübe/Trakeostomili") {
+
+  if (entubeMi(klDurum.hava_yolu)) {
     document.getElementById("fEntubeDestek").value = klDurum.entube_destek || "";
     entubeDestekDegisti();
     
@@ -807,6 +853,11 @@ function formDoldur(h) {
 
   // Beslenme / Diürez / IR
   document.getElementById("fBeslenme").value = klDurum.beslenme || "Yok";
+  beslenmeDegisti();
+  const yollar = klDurum.beslenme_yollari || [];
+  document.querySelectorAll('#fBeslenmeYollariGroup input[type="checkbox"]').forEach(cb => {
+    cb.checked = yollar.includes(cb.value);
+  });
   document.getElementById("fDiurez").value   = klDurum.diurez || "";
   document.getElementById("fIrPupil").value  = klDurum.ir_pupil || "";
 
@@ -831,6 +882,10 @@ function formDoldur(h) {
   document.getElementById("fCrrtVar").checked = !!klDurum.crrt_var;
   vaskulerToggle("crrt");
   if (klDurum.crrt_var && klDurum.crrt_baslangic) document.getElementById("fCrrtBaslangic").value = klDurum.crrt_baslangic;
+  if (klDurum.crrt_var && klDurum.crrt_tipi) document.getElementById("fCrrtTipi").value = klDurum.crrt_tipi;
+
+  document.getElementById("fBikarbonatVar").checked = !!klDurum.bikarbonat_var;
+  vaskulerToggle("bikarbonat");
 
   // Planlanan işlemler
   (h.planlanan_islemler || []).forEach(i => islemEkle(i));
@@ -876,6 +931,7 @@ function vaskulerToggle(tip) {
     diyalizKat:{ cb:"fDiyalizKatVar",lbl:"diyalizKatLabel",grp:"diyalizKatToggleGroup",on:"Var",      off:"Yok",      div:"diyalizKatYerDiv" },
     diyaliz:   { cb:"fDiyalizVar",   lbl:"diyalizLabel",   grp:"diyalizToggleGroup",   on:"Alıyor",  off:"Almıyor",  div:"diyalizGunleriDiv" },
     crrt:      { cb:"fCrrtVar",      lbl:"crrtLabel",      grp:"crrtToggleGroup",      on:"Alıyor",  off:"Almıyor",  div:"crrtDetayDiv" },
+    bikarbonat:{ cb:"fBikarbonatVar",lbl:"bikarbonatLabel",grp:"bikarbonatToggleGroup",on:"Alıyor",  off:"Almıyor" },
   };
   const m = map[tip]; if (!m) return;
   const cb  = document.getElementById(m.cb);
@@ -923,15 +979,32 @@ function ajanEkle(tip, data = null) {
   if (!liste) return;
   const div = document.createElement("div");
 
-  // Sedasyon: serbest metin (ajan + doz) — değişmedi
+  // Sedasyon: sabit ilaç listesi + infüzyon hızı (doz aralığı hesaplanmaz)
   if (tip !== "inot") {
-    div.className = "ajan-item";
+    const secili = data?.ajan || "";
+    const digerMi = !!secili && !SEDASYON_ILACLARI.includes(secili);
+    div.className = "ajan-item ajan-sed";
     div.innerHTML = `
-      <input class="form-input ajan-adi" type="text" placeholder="Ajan adı (örn. Midazolam)"
-             value="${escHtml(data?.ajan || "")}" data-field="ajan" />
-      <input class="form-input ajan-doz" type="text" placeholder="Doz (örn. 5 mg/saat)"
-             value="${escHtml(data?.doz || "")}" data-field="doz" />
-      <button type="button" class="btn-remove-item" onclick="this.parentElement.remove()" title="Kaldır">✕</button>`;
+      <div class="ajan-inot-ust">
+        <select class="form-select ajan-adi" onchange="sedAjanDegisti(this)">
+          <option value="">— İlaç seçin —</option>
+          ${SEDASYON_ILACLARI.map(i => `<option value="${i}" ${i === secili ? "selected" : ""}>${i}</option>`).join("")}
+          <option value="__diger__" ${digerMi ? "selected" : ""}>Diğer (elle yaz)</option>
+        </select>
+        <label class="ajan-mini ajan-sed-hiz" style="display:${digerMi ? "none" : "flex"};">Hız
+          <span class="ajan-birimli">
+            <input class="form-input ajan-hiz" type="number" step="any" min="0"
+                   value="${data?.hiz_cc_saat ?? ""}" /><span>cc/h</span>
+          </span>
+        </label>
+        <button type="button" class="btn-remove-item" onclick="this.closest('.ajan-item').remove()" title="Kaldır">✕</button>
+      </div>
+      <div class="ajan-diger" style="display:${digerMi ? "grid" : "none"};">
+        <input class="form-input ajan-diger-ad" type="text" placeholder="Ajan adı"
+               value="${escHtml(digerMi ? secili : "")}" />
+        <input class="form-input ajan-diger-doz" type="text" placeholder="Doz / hız (örn. 5 cc/h)"
+               value="${escHtml(data?.doz || "")}" />
+      </div>`;
     liste.appendChild(div);
     return;
   }
@@ -1001,6 +1074,14 @@ function ajanEkle(tip, data = null) {
 
 function _ajanSatir(uid) {
   return document.querySelector(`#inotAjanList .ajan-item[data-uid="${uid}"]`);
+}
+
+/** Sedasyonda "Diğer" seçilince hız kutusu yerine serbest metin alanları gösterilir. */
+function sedAjanDegisti(sel) {
+  const el = sel.closest(".ajan-item");
+  const diger = sel.value === "__diger__";
+  el.querySelector(".ajan-sed-hiz").style.display = diger ? "none" : "flex";
+  el.querySelector(".ajan-diger").style.display   = diger ? "grid" : "none";
 }
 
 /** İlaç seçimi değişti: hazırlık alanlarını tablodaki baz değerlerle doldur. */
@@ -1077,11 +1158,22 @@ function inotHesapla(uid) {
   kutu.style.display = "block";
 }
 
+/** Enteral beslenme seçiliyse yol (oral/NG/OG/PEG) kutucukları görünsün. */
+function beslenmeDegisti() {
+  const v = document.getElementById("fBeslenme").value;
+  const goster = v === "Enteral" || v === "Enteral+Parenteral";
+  const div = document.getElementById("beslenmeYoluDiv");
+  if (div) div.style.display = goster ? "" : "none";
+  if (!goster) {
+    document.querySelectorAll('#fBeslenmeYollariGroup input[type="checkbox"]').forEach(cb => cb.checked = false);
+  }
+}
+
 function havaYoluDegisti() {
   const v = document.getElementById("fHavaYolu").value;
-  document.getElementById("entubeDestekDiv").style.display = v === "Entübe/Trakeostomili" ? "block" : "none";
+  document.getElementById("entubeDestekDiv").style.display = entubeMi(v) ? "block" : "none";
   document.getElementById("nonEntubeDestekDiv").style.display = v === "Entübe değil" ? "block" : "none";
-  if (v !== "Entübe/Trakeostomili") {
+  if (!entubeMi(v)) {
     document.getElementById("fEntubeDestek").value = "";
     entubeDestekDegisti();
   }
@@ -1241,13 +1333,23 @@ async function hastaKaydet(e) {
     });
   });
 
-  // Sedasyon ajanlar
+  // Sedasyon ajanlar — sabit listedekiler için hız, "Diğer" için serbest metin
   const sedVar = document.getElementById("fSedVar").checked;
   const sedAjanlar = [];
   document.getElementById("sedAjanList").querySelectorAll(".ajan-item").forEach(el => {
-    const ajan = el.querySelector('[data-field="ajan"]')?.value?.trim();
-    const doz  = el.querySelector('[data-field="doz"]')?.value?.trim();
-    if (ajan) sedAjanlar.push({ ajan, doz: doz || "" });
+    const secim = el.querySelector(".ajan-adi")?.value || "";
+    if (secim === "__diger__") {
+      const ad  = el.querySelector(".ajan-diger-ad")?.value?.trim();
+      const doz = el.querySelector(".ajan-diger-doz")?.value?.trim();
+      if (ad) sedAjanlar.push({ ajan: ad, doz: doz || "" });
+      return;
+    }
+    if (!secim) return;
+    sedAjanlar.push({
+      ajan: secim,
+      doz: "",
+      hiz_cc_saat: sayi(el.querySelector(".ajan-hiz")?.value),
+    });
   });
 
   // Planlanan işlemler
@@ -1304,6 +1406,11 @@ async function hastaKaydet(e) {
       inot_var: inotVar, inot_ajanlar: inotAjanlar,
       sed_var:  sedVar,  sed_ajanlar:  sedAjanlar,
       beslenme: document.getElementById("fBeslenme").value,
+      beslenme_yollari: (() => {
+        const y = [];
+        document.querySelectorAll('#fBeslenmeYollariGroup input[type="checkbox"]:checked').forEach(cb => y.push(cb.value));
+        return y;
+      })(),
       diurez:   document.getElementById("fDiurez").value.trim(),
       ir_pupil: document.getElementById("fIrPupil").value,
       // Vasküler Erişim & Renal
@@ -1320,6 +1427,7 @@ async function hastaKaydet(e) {
       crrt_var: document.getElementById("fCrrtVar").checked,
       crrt_baslangic: document.getElementById("fCrrtBaslangic")?.value || "",
       crrt_tipi: document.getElementById("fCrrtTipi")?.value || "",
+      bikarbonat_var: document.getElementById("fBikarbonatVar").checked,
     },
     planlanan_islemler: planlananIslemler,
     goruntuleme_tetkik: goruntulemeTetkik,
@@ -1414,7 +1522,11 @@ async function hastaDetayAc(id) {
       </div>`;
   }).join("");
   const inotStr = inotDetayHtml || (klDurum.inot_var ? "Kullanılıyor" : "");
-  const sedStr  = (klDurum.sed_ajanlar  || []).map(a => `${escHtml(a.ajan)}${a.doz ? " " + escHtml(a.doz) : ""}`).join(" / ") || (klDurum.sed_var  ? "Kullanılıyor" : "");
+  const sedStr = (klDurum.sed_ajanlar || []).filter(a => a && a.ajan).map(a => {
+    const hiz = sayi(a.hiz_cc_saat);
+    const detay = hiz !== null ? `${dozYaz(hiz, 1)} cc/h` : (a.doz ? escHtml(a.doz) : "");
+    return `<div class="inot-detay-satir"><strong>${escHtml(a.ajan)}</strong>${detay ? ` <span class="inot-doz">${detay}</span>` : ""}</div>`;
+  }).join("") || (klDurum.sed_var ? "Kullanılıyor" : "");
 
   const klinikHtml = `
     <div class="detay-section" style="margin-top:16px;">
@@ -1422,8 +1534,8 @@ async function hastaDetayAc(id) {
       <div class="klinik-durum-grid">
         <div class="kd-panel ${(klDurum.hava_yolu || klDurum.vent_var) ? "aktif-vent" : ""}">
           <div class="kd-panel-label">🫁 Solunum / Hava Yolu</div>
-          ${klDurum.hava_yolu === "Entübe/Trakeostomili"
-            ? `<div class="kd-panel-value vent-v">Entübe/Trakeostomili<br><small style="font-weight:normal;opacity:0.9">${escHtml(klDurum.entube_destek)}${klDurum.entube_destek === 'Mekanik ventilatöre bağlı' && klDurum.vent_mod ? ' — ' + escHtml(klDurum.vent_mod) : ''}</small></div>`
+          ${entubeMi(klDurum.hava_yolu)
+            ? `<div class="kd-panel-value vent-v">${escHtml(klDurum.hava_yolu)}<br><small style="font-weight:normal;opacity:0.9">${escHtml(klDurum.entube_destek)}${klDurum.entube_destek === 'Mekanik ventilatöre bağlı' && klDurum.vent_mod ? ' — ' + escHtml(klDurum.vent_mod) : ''}</small></div>`
             : klDurum.hava_yolu === "Entübe değil" && klDurum.non_entube_destek && klDurum.non_entube_destek.length
             ? `<div class="kd-panel-value vent-v">Entübe Değil<br><small style="font-weight:normal;opacity:0.9">${escHtml(klDurum.non_entube_destek.join(", "))}</small></div>`
             : klDurum.vent_var 
@@ -1444,7 +1556,9 @@ async function hastaDetayAc(id) {
         </div>
         <div class="kd-panel">
           <div class="kd-panel-label">🍽 Beslenme</div>
-          <div class="kd-panel-value ${!klDurum.beslenme || klDurum.beslenme === "Yok" ? "bos" : ""}">${escHtml(klDurum.beslenme) || "—"}</div>
+          <div class="kd-panel-value ${!klDurum.beslenme || klDurum.beslenme === "Yok" ? "bos" : ""}">${escHtml(klDurum.beslenme) || "—"}${
+            (klDurum.beslenme_yollari || []).length
+              ? `<br><small style="font-weight:normal;opacity:.9">${escHtml(klDurum.beslenme_yollari.join(" / "))}</small>` : ""}</div>
         </div>
         <div class="kd-panel">
           <div class="kd-panel-label">💧 Diürez</div>
@@ -1485,6 +1599,12 @@ async function hastaDetayAc(id) {
           ${klDurum.crrt_var
             ? `<div class="kd-panel-value inot-v">Alıyor${klDurum.crrt_tipi ? ' (' + escHtml(klDurum.crrt_tipi) + ')' : ''}
                ${klDurum.crrt_baslangic ? '<br><small style="font-weight:normal;opacity:.9">Başlangıç: ' + escHtml(klDurum.crrt_baslangic) + (kacGundurKullaniliyor(klDurum.crrt_baslangic) ? ' — ' + kacGundurKullaniliyor(klDurum.crrt_baslangic) : '') + '</small>' : ''}</div>`
+            : `<div class="kd-panel-value bos">—</div>`}
+        </div>
+        <div class="kd-panel ${klDurum.bikarbonat_var ? 'aktif-inot' : ''}">
+          <div class="kd-panel-label">🧪 Bikarbonat İnfüzyonu</div>
+          ${klDurum.bikarbonat_var
+            ? `<div class="kd-panel-value inot-v">Alıyor</div>`
             : `<div class="kd-panel-value bos">—</div>`}
         </div>
       </div>

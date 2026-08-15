@@ -19,23 +19,23 @@ from typing import Optional
 # baz_miktar: x1 hazırlıkta hacim_cc içine konan miktar
 ILAC_TABLOSU = {
     "Noradrenalin": {
-        "baz_miktar": 8, "hacim_cc": 100, "miktar_birimi": "mg",
+        "kisa": "NA", "baz_miktar": 8, "hacim_cc": 100, "miktar_birimi": "mg",
         "doz_birimi": "mcg/kg/dk", "min_doz": 0.1, "max_doz": 4, "kilo_bazli": True,
     },
     "Adrenalin": {
-        "baz_miktar": 8, "hacim_cc": 100, "miktar_birimi": "mg",
+        "kisa": "AD", "baz_miktar": 8, "hacim_cc": 100, "miktar_birimi": "mg",
         "doz_birimi": "mcg/kg/dk", "min_doz": 0.05, "max_doz": 2, "kilo_bazli": True,
     },
     "Dopamin": {
-        "baz_miktar": 400, "hacim_cc": 100, "miktar_birimi": "mg",
+        "kisa": "DP", "baz_miktar": 400, "hacim_cc": 100, "miktar_birimi": "mg",
         "doz_birimi": "mcg/kg/dk", "min_doz": 3, "max_doz": 20, "kilo_bazli": True,
     },
     "Dobutamin": {
-        "baz_miktar": 500, "hacim_cc": 100, "miktar_birimi": "mg",
+        "kisa": "DB", "baz_miktar": 500, "hacim_cc": 100, "miktar_birimi": "mg",
         "doz_birimi": "mcg/kg/dk", "min_doz": 2, "max_doz": 20, "kilo_bazli": True,
     },
     "Vazopressin": {
-        "baz_miktar": 20, "hacim_cc": 100, "miktar_birimi": "ünite",
+        "kisa": "VP", "baz_miktar": 20, "hacim_cc": 100, "miktar_birimi": "ünite",
         "doz_birimi": "ünite/dk", "min_doz": 0.01, "max_doz": 0.07, "kilo_bazli": False,
     },
 }
@@ -43,6 +43,19 @@ ILAC_TABLOSU = {
 CARPANLAR = (1, 2, 4)
 
 ILAC_LISTESI = list(ILAC_TABLOSU.keys())
+
+# Sedasyon/analjezi/nöromusküler bloker infüzyonları.
+# İnotroplardan farklı olarak doz aralığı hesaplanmaz; yalnızca infüzyon hızı tutulur.
+SEDASYON_ILACLARI = [
+    "Midazolam", "Fentanyl", "Deksmedetomidin",
+    "Tiyopental", "Propofol", "Rokuronyum",
+]
+
+# Hava yolu: eski kayıtlarda "Entübe/Trakeostomili" tek seçenekti, artık ayrı.
+ENTUBE_DEGERLERI = ("Entübe", "Trakeostomili", "Entübe/Trakeostomili")
+
+# Enteral beslenme yolları (birden fazla seçilebilir — NG'den verilip oral denenebiliyor)
+BESLENME_YOLLARI = ["Oral", "NG", "OG", "PEG"]
 
 
 def _sayi(deger) -> Optional[float]:
@@ -153,6 +166,7 @@ def ajan_ozeti(ajan_dict: dict, kilo) -> dict:
     h = doz_hesapla(ajan, miktar, hacim, hiz, kilo)
     return {
         "ajan": ajan,
+        "kisa": bilgi["kisa"],
         "tabloda": True,
         "carpan": carpan,
         "miktar": miktar,

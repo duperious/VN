@@ -187,7 +187,8 @@
               <label class="form-label">Solunum Desteği / Hava Yolu</label>
               <select class="form-select" id="fHavaYolu" onchange="havaYoluDegisti()">
                 <option value="">— Seçin —</option>
-                <option value="Entübe/Trakeostomili">Entübe / Trakeostomili</option>
+                <option value="Entübe">Entübe</option>
+                <option value="Trakeostomili">Trakeostomili</option>
                 <option value="Entübe değil">Entübe değil</option>
               </select>
             </div>
@@ -200,7 +201,7 @@
                 <label class="form-label" for="fEntubeDestek">Destek Türü</label>
                 <select class="form-select" id="fEntubeDestek" onchange="entubeDestekDegisti()">
                   <option value="">— Seçin —</option>
-                  <option value="Oda havası">Oda havası (T-tüp/trach collar, spontan)</option>
+                  <option value="Oda havası">Oda havası</option>
                   <option value="Humidvent">Humidvent</option>
                   <option value="T-tüp">T-tüp</option>
                   <option value="Mekanik ventilatöre bağlı">Mekanik ventilatöre bağlı</option>
@@ -298,7 +299,7 @@
           <div class="form-row" style="margin-top:10px; grid-template-columns:1fr 1fr 1fr;">
             <div class="form-group">
               <label class="form-label" for="fBeslenme">Beslenme</label>
-              <select class="form-select" id="fBeslenme">
+              <select class="form-select" id="fBeslenme" onchange="beslenmeDegisti()">
                 <option>Yok</option>
                 <option>Enteral</option>
                 <option>Parenteral</option>
@@ -320,6 +321,18 @@
                 <option>Bilateral -/-</option>
                 <option>Değerlendirilemedi</option>
               </select>
+            </div>
+          </div>
+          <!-- Enteral beslenme yolu (birden fazla seçilebilir) -->
+          <div class="form-row" id="beslenmeYoluDiv" style="display:none; margin-top:8px;">
+            <div class="form-group" style="grid-column:1/-1;">
+              <label class="form-label">Enteral Yol (birden fazla seçilebilir)</label>
+              <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:4px;" id="fBeslenmeYollariGroup">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="Oral"> Oral</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="NG"> NG</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="OG"> OG</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="PEG"> PEG</label>
+              </div>
             </div>
           </div>
         </div>
@@ -352,7 +365,7 @@
               <select class="form-select" id="fCvpYer">
                 <option value="">— Seçin —</option>
                 <option>SC (Subklavyen)</option>
-                <option>İJVC (İnternal Juguler)</option>
+                <option>İJV (İnternal Juguler)</option>
                 <option>Femoral</option>
               </select>
             </div>
@@ -376,7 +389,7 @@
               <select class="form-select" id="fDiyalizKatYer">
                 <option value="">— Seçin —</option>
                 <option>SC (Subklavyen)</option>
-                <option>İJVC (İnternal Juguler)</option>
+                <option>İJV (İnternal Juguler)</option>
                 <option>Femoral</option>
                 <option>Fistül</option>
               </select>
@@ -437,6 +450,21 @@
                 <label class="form-label" for="fCrrtBaslangic">Başlangıç Tarihi</label>
                 <input class="form-input" type="date" id="fCrrtBaslangic" />
               </div>
+            </div>
+          </div>
+
+          <!-- Bikarbonat infüzyonu (derin asidoz) -->
+          <div class="form-row" style="margin-top:10px;">
+            <div class="form-group">
+              <label class="form-label">Bikarbonat İnfüzyonu Alıyor mu?</label>
+              <label class="toggle-group" id="bikarbonatToggleGroup" style="margin-top:4px;">
+                <div class="toggle-switch">
+                  <input type="checkbox" id="fBikarbonatVar" onchange="vaskulerToggle('bikarbonat')" />
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </div>
+                <span class="toggle-label" id="bikarbonatLabel">Almıyor</span>
+              </label>
             </div>
           </div>
         </div>
