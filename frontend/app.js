@@ -126,7 +126,7 @@ function oturumKapatArayuzu() {
   if (logoutBtn) logoutBtn.style.display = "none";
   tumHastalar = [];
   gosterilen = [];
-  renderHastalar();
+  renderHersey();
 }
 
 async function oturumKontrol() {
@@ -980,7 +980,8 @@ async function hastaKaydet(e) {
     kultur_takibi: kulturTakibi,
     antibiyotikler: antibiyotikler,
     genel_not: document.getElementById("fGenelNot").value.trim(),
-    durum: "aktif",
+    // durum bilerek gönderilmiyor: backend mevcut değeri korur. Sabit "aktif"
+    // göndermek taburcu hastayı düzenlerken aktife çeviriyor ve çıkış kaydını siliyordu.
   };
 
   const btn = document.getElementById("btnKaydet");

@@ -3,9 +3,11 @@ models.py — Pydantic veri modelleri v2
 Yeni alanlar: unite, kabul_epikrizi, klinik_durum (structured)
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 import json
+
+from database import UNITE_KONFIG
 
 
 # ── Alt modeller ──────────────────────────────────────────────────────────────
@@ -106,12 +108,60 @@ class HastaBase(BaseModel):
 
 
 
-class HastaCreate(HastaBase):
+class _HastaGirdi(HastaBase):
+    """
+    Kullanıcı girdisi için doğrulamalar.
+
+    Bilerek HastaBase'e değil bu ara sınıfa konuldu: DB'de kapasite dışı yatak
+    numarası gibi eski/hatalı kayıtlar var ve okuma modeli (Hasta) bunları
+    doğrulamaya takılmadan döndürebilmeli.
+    """
+
+    @field_validator("unite")
+    @classmethod
+    def _unite_gecerli(cls, v: str) -> str:
+        if v not in UNITE_KONFIG:
+            raise ValueError(
+                f"Geçersiz ünite: '{v}'. Geçerli üniteler: {', '.join(UNITE_KONFIG)}"
+            )
+        return v
+
+    @field_validator("yatak_no")
+    @classmethod
+    def _yatak_no_gecerli(cls, v: str, info) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Yatak no boş olamaz.")
+        try:
+            no = int(v)
+        except ValueError:
+            raise ValueError(f"Yatak no sayı olmalı: '{v}'")
+        # unite, yatak_no'dan önce tanımlı olduğu için burada hazır
+        kapasite = UNITE_KONFIG.get(info.data.get("unite"))
+        if kapasite and not (1 <= no <= kapasite):
+            raise ValueError(
+                f"{info.data['unite']} ünitesinde yatak no 1-{kapasite} arasında olmalı "
+                f"(verilen: {no})."
+            )
+        return str(no)
+
+    @field_validator("ad_soyad")
+    @classmethod
+    def _ad_soyad_gecerli(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Ad soyad boş olamaz.")
+        return v
+
+
+class HastaCreate(_HastaGirdi):
     pass
 
 
-class HastaUpdate(HastaBase):
-    durum: Optional[str] = "aktif"
+class HastaUpdate(_HastaGirdi):
+    # None = "değiştirme, mevcut değeri koru" (taburcu hastanın düzenlenince
+    # aktife dönmesini engeller)
+    durum: Optional[str] = None
 
 
 class CikisRequest(BaseModel):

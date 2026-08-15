@@ -1,6 +1,6 @@
 """
 pdf_export.py — v2
-Playwright/Chromium ile HTML→PDF dönüşümü.
+WeasyPrint ile HTML→PDF dönüşümü.
 Yeni alanlar: unite, klinik_durum (yapılandırılmış), kabul_epikrizi / seyir_notlari ayrımı.
 """
 
@@ -520,31 +520,20 @@ def _html_olustur(hastalar: list, unite_filtre: str = "") -> str:
 
 def uret_pdf(hastalar: list, unite_filtre: str = "") -> bytes:
     """
-    Playwright/Chromium ile HTML→PDF dönüşümü.
-    Eş zamanlı çağrı uyumlu — her çağrı kendi event loop'unu yönetir.
+    WeasyPrint ile HTML→PDF dönüşümü.
+    Sayfa boyutu ve kenar boşlukları şablondaki @page kuralından gelir.
     """
     html_str = _html_olustur(hastalar, unite_filtre)
 
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
+        from weasyprint import HTML
+    except ImportError as e:
         raise RuntimeError(
-            "Playwright kurulu değil. "
-            "Lütfen 'py -m pip install playwright && py -m playwright install chromium' çalıştırın."
-        )
+            "WeasyPrint kurulu değil. "
+            "Lütfen 'pip install -r backend/requirements.txt' çalıştırın."
+        ) from e
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.set_content(html_str, wait_until="domcontentloaded")
-        pdf_bytes = page.pdf(
-            format="A4",
-            margin={"top": "11mm", "right": "13mm", "bottom": "11mm", "left": "13mm"},
-            print_background=True,
-        )
-        browser.close()
-
-    return pdf_bytes
+    return HTML(string=html_str).write_pdf()
 
 
 def uret_html(hastalar: list, unite_filtre: str = "") -> str:

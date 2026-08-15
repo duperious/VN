@@ -5,3 +5,5 @@ __pycache__/
 backend/vizit.db
 .antigravity/
 node_modules/
+.venv/
+venv/

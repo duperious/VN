@@ -13,7 +13,12 @@ cd backend
 pip install -r requirements.txt
 ```
 
-### 3. Uygulamayı başlat
+### 3. Ayarları yap
+`.env.example` dosyasını `.env` olarak kopyalayıp doldurun. Özellikle
+`JWT_SECRET` tanımlanmazsa her açılışta rastgele üretilir ve sunucu yeniden
+başladığında tüm oturumlar düşer.
+
+### 4. Uygulamayı başlat
 ```bash
 python main.py
 ```
@@ -34,7 +39,7 @@ API dokümantasyonu: **http://localhost:8000/docs**
 |---------|-------|
 | Hasta listesi | Yatak sırasına göre sıralı, durum ikonları |
 | Durum ikonları | 🫁 Ventilatör, 💉 İnotrop, ⚠ Yaklaşan işlem |
-| Epikriz log | Kronolojik, sadece ekleme (silinemez) |
+| Epikriz log | Kronolojik; not eklenebilir, düzenlenebilir ve silinebilir |
 | Yaklaşan işlem | 7 gün içindeki işlemler vurgulanır |
 | Aktif / Taburcu | Sekme bazlı ayrım, arşiv kaybı yok |
 | PDF export | Tüm aktif hastalar veya tek hasta |
@@ -42,7 +47,11 @@ API dokümantasyonu: **http://localhost:8000/docs**
 
 ## Veri Yedekleme
 
-Tüm veri `backend/vizit.db` dosyasında. Bu dosyayı kopyalamak yeterli.
+Tüm veri `backend/vizit.db` dosyasında (veya `DB_PATH` neyi gösteriyorsa).
+Bu dosyayı kopyalamak yeterli.
+
+Veritabanı hasta verisi içerdiği için git'e gönderilmez. Dağıtımda `DB_PATH`
+kalıcı bir diske işaret etmelidir; aksi halde her yeniden dağıtımda veri kaybolur.
 
 ## WeasyPrint (PDF) Notu
 

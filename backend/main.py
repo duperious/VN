@@ -5,7 +5,9 @@ Giriş koruması (bcrypt + JWT / Session), ünite filtresi, hasta takibi
 
 import os
 import json
-from datetime import datetime, timedelta
+import secrets
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -31,11 +33,25 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 load_dotenv(Path(__file__).parent / ".env")
 
 AUTH_USERNAME = os.getenv("AUTH_USERNAME", "byieaharyb")
-AUTH_PASSWORD_HASH = os.getenv(
-    "AUTH_PASSWORD_HASH",
-    "$2b$12$fBW0Inz2q5h6A.LSF.WFnOcxNy9omGlFzqjZtXopNBAFx4qXLArX2"
-)
-JWT_SECRET = os.getenv("JWT_SECRET", "vizit_notu_secret_key_2026_x89f_secure_token_key")
+# Varsayılan hash kod deposunda açıkta duruyor. Mevcut kurulumu bozmamak için
+# korunuyor, ancak üretimde .env üzerinden ezilmeli.
+AUTH_PASSWORD_HASH = os.getenv("AUTH_PASSWORD_HASH", "")
+if not AUTH_PASSWORD_HASH:
+    AUTH_PASSWORD_HASH = "$2b$12$fBW0Inz2q5h6A.LSF.WFnOcxNy9omGlFzqjZtXopNBAFx4qXLArX2"
+    print(
+        "[UYARI] AUTH_PASSWORD_HASH tanımlı değil; kod içindeki varsayılan hash kullanılıyor. "
+        "Bu hash kod deposunda açıkta — .env dosyasına kendi hash'inizi ekleyin."
+    )
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    # Sabit bir varsayılan secret, token'ları herkesin üretebilmesi anlamına gelir.
+    # Tanımlı değilse her açılışta rastgele üret — güvenli ama restart'ta oturumlar düşer.
+    JWT_SECRET = secrets.token_urlsafe(48)
+    print(
+        "[UYARI] JWT_SECRET tanımlı değil; bu açılış için rastgele üretildi. "
+        "Sunucu her yeniden başladığında oturumlar düşecek. "
+        "Kalıcı oturumlar için .env dosyasına JWT_SECRET ekleyin."
+    )
 JWT_ALGORITHM = "HS256"
 
 security = HTTPBearer(auto_error=False)
@@ -59,7 +75,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(days=7))
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(days=7))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
@@ -97,10 +113,17 @@ async def get_current_user(
     return payload["sub"]
 
 # ── Uygulama ──────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
 app = FastAPI(
     title="Vizit Kağıdı API v2",
     description="Yoğun Bakım Servisi Hasta Takip Sistemi — Ünite destekli ve Güvenlikli",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -110,9 +133,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-def startup():
-    init_db()
+@app.get("/health", include_in_schema=False)
+def health():
+    """Dağıtım platformlarının sağlık kontrolü için."""
+    return {"status": "ok"}
 
 # ── Frontend static dosyaları ─────────────────────────────────────────────────
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
@@ -199,6 +223,27 @@ def _fetch_hasta(conn, hasta_id: int) -> Hasta:
         (hasta_id,),
     ).fetchall()
     return Hasta.from_row(row, epikriz)
+
+CIKIS_TURLERI = ("taburcu", "servis", "exitus", "sevk", "devir")
+
+def _yatak_dogrula(unite: str, yatak_no: str) -> str:
+    """Ünite kodunu ve yatak numarasını kapasiteye göre doğrular."""
+    if unite not in UNITE_KONFIG:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Geçersiz ünite: '{unite}'. Geçerli üniteler: {', '.join(UNITE_KONFIG)}",
+        )
+    try:
+        no = int(str(yatak_no).strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"Yatak no sayı olmalı: '{yatak_no}'")
+    kapasite = UNITE_KONFIG[unite]
+    if not (1 <= no <= kapasite):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{unite} ünitesinde yatak no 1-{kapasite} arasında olmalı (verilen: {no}).",
+        )
+    return str(no)
 
 def _hasta_to_db_params(hasta: HastaBase) -> tuple:
     """Model → DB kayıt parametreleri."""
@@ -298,7 +343,10 @@ def hasta_guncelle(hasta_id: int, hasta: HastaUpdate):
     """Hasta bilgilerini güncelle."""
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id, unite, yatak_no FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
+        row = conn.execute(
+            "SELECT id, unite, yatak_no, durum, cikis_turu, cikis_detayi FROM hastalar WHERE id = ?",
+            (hasta_id,),
+        ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
 
@@ -313,7 +361,16 @@ def hasta_guncelle(hasta_id: int, hasta: HastaUpdate):
                     detail=f"{hasta.unite} ünitesinde {hasta.yatak_no} no'lu yatak dolu.",
                 )
 
-        params = _hasta_to_db_params(hasta)
+        # Düzenleme formu durum/çıkış alanlarını göndermez. Gönderilmediklerinde
+        # mevcut kayıt korunmalı; aksi halde taburcu hasta aktife döner ve
+        # çıkış bilgisi (exitus/sevk vb.) silinir.
+        params = list(_hasta_to_db_params(hasta))
+        if hasta.cikis_turu is None:
+            params[-2] = row["cikis_turu"]      # cikis_turu
+        if hasta.cikis_detayi is None:
+            params[-1] = row["cikis_detayi"]    # cikis_detayi
+        durum = hasta.durum or row["durum"]
+
         conn.execute(
             """
             UPDATE hastalar SET
@@ -324,7 +381,7 @@ def hasta_guncelle(hasta_id: int, hasta: HastaUpdate):
                 genel_not = ?, cikis_turu = ?, cikis_detayi = ?, durum = ?
             WHERE id = ?
             """,
-            (*params, hasta.durum, hasta_id),
+            (*params, durum, hasta_id),
         )
         conn.commit()
         return _fetch_hasta(conn, hasta_id)
@@ -360,10 +417,19 @@ def hasta_cikis_islemi(hasta_id: int, req: CikisRequest):
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
 
+        if req.islem_turu not in CIKIS_TURLERI:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Geçersiz işlem türü: '{req.islem_turu}'. "
+                       f"Geçerli değerler: {', '.join(CIKIS_TURLERI)}",
+            )
+
         if req.islem_turu == "devir":
             if not req.yeni_unite or not req.yeni_yatak_no:
                 raise HTTPException(status_code=400, detail="Yeni ünite ve yatak no zorunludur.")
-            
+
+            req.yeni_yatak_no = _yatak_dogrula(req.yeni_unite, req.yeni_yatak_no)
+
             mevcut = conn.execute(
                 "SELECT id FROM hastalar WHERE unite = ? AND yatak_no = ? AND durum = 'aktif'",
                 (req.yeni_unite, req.yeni_yatak_no),
@@ -553,7 +619,7 @@ def export_pdf(
             h["epikriz_notlari"] = [dict(e) for e in epikriz]
             hastalar.append(h)
 
-        pdf_bytes = uret_pdf(hastalar)
+        pdf_bytes = uret_pdf(hastalar, unite or "")
 
         unite_str = f"_{unite}" if unite else ""
         return Response(
