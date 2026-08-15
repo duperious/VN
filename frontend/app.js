@@ -116,6 +116,35 @@ function kaloriIhtiyaci(kilo) {
   return { min: Math.round(kg * KCAL_MIN_PER_KG), max: Math.round(kg * KCAL_MAX_PER_KG) };
 }
 
+// ── Kültür özeti ────────────────────────────────────────────────────────────
+
+// "Üreme yok" anlamına gelen serbest metin kalıpları — sonucu yeşil göstermek için.
+// Bu kalıplardan hiçbirini içermeyen sonuç üreme kabul edilip kırmızı gösterilir.
+const TEMIZ_KALIPLARI = [
+  "üreme yok", "üreme olmadı", "üreme saptanmadı", "temiz",
+  "negatif", "steril", "normal flora",
+];
+
+function uremeYokMu(sonuc) {
+  const s = (sonuc || "").toLocaleLowerCase("tr");
+  return TEMIZ_KALIPLARI.some(k => s.includes(k));
+}
+
+/**
+ * Her kültür türü için en güncel kaydı döndürür.
+ * Aynı türden birden fazla kültür varsa tarihi en yeni olan alınır;
+ * tarih girilmemişse listedeki son kayıt kazanır.
+ */
+function sonKulturler(liste) {
+  const gruplar = new Map();
+  (liste || []).forEach(k => {
+    if (!k || !k.tur) return;
+    const onceki = gruplar.get(k.tur);
+    if (!onceki || (k.tarih || "") >= (onceki.tarih || "")) gruplar.set(k.tur, k);
+  });
+  return [...gruplar.entries()];
+}
+
 /**
  * Sayıyı okunur biçimde kısaltır (0,1 / 12,5 / 1667).
  * Sondaki sıfırlar YALNIZCA ondalık kısımda kırpılır — aksi halde 100 → 1 olurdu.
@@ -533,15 +562,19 @@ function renderKart(h) {
     yakBadge += `<div class="yaklasan-badge" style="background:rgba(14,165,233,.12);border-color:#0ea5e9;color:#0ea5e9">💧 ${diyalizUyari === "bugün" ? "Bugün diyaliz günü" : "Yarın diyaliz günü"}</div>`;
   }
 
-  // Kültür uyarıları ve AB özeti
+  // Kültür özeti ve AB özeti
   let kulturBadge = "";
   if (h.kultur_takibi && h.kultur_takibi.length) {
-    const bekleyenler = h.kultur_takibi.filter(k => k.sonuc === "Bekleniyor" || !k.sonuc);
-    if (bekleyenler.length) {
-      const bTxt = bekleyenler.map(b => b.tur).join(", ");
-      kulturBadge += `<div class="yaklasan-badge" style="background:rgba(245,158,11,.12);border-color:#f59e0b;color:#d97706">🧫 ${escHtml(bTxt)} Kx. Sonuç Bekleniyor</div>`;
-    }
-    
+    // Her kültür grubunun (Kan, TAS, İdrar, Yara…) SON sonucu
+    const chipler = sonKulturler(h.kultur_takibi).map(([tur, k]) => {
+      const bekliyor = !k.sonuc || k.sonuc === "Bekleniyor";
+      const metin = bekliyor ? "Bekleniyor" : k.sonuc;
+      const sinif = bekliyor ? "bekliyor" : (uremeYokMu(k.sonuc) ? "temiz" : "ureme");
+      const baslik = `${tur} kültürü${k.tarih ? " — " + k.tarih : ""}`;
+      return `<span class="kultur-chip ${sinif}" title="${escHtml(baslik)}">${escHtml(tur)}: ${escHtml(metin)}</span>`;
+    }).join("");
+    if (chipler) kulturBadge += `<div class="kultur-satiri">🧫 ${chipler}</div>`;
+
     // Antibiyotikler (Kültüre bağlı olanlar - Geriye dönük uyum)
     const aktifKulturAbler = (h.kultur_takibi || []).filter(k => k.antibiyotik_adi);
     // Bağımsız antibiyotikler
@@ -1973,15 +2006,35 @@ async function hastaSil(id) {
 // ── PDF EXPORT
 // ════════════════════════════════════════════════════════════════════════════
 
+/**
+ * PDF motoru yoksa (macOS'ta WeasyPrint sistem kütüphanesi eksikse) yazdırma
+ * görünümünü yeni sekmede aç. Kimlik doğrulama çerezle yapıldığı için düz
+ * bağlantı çalışır; kullanıcı Cmd/Ctrl+P ile PDF olarak kaydedebilir.
+ */
+function yazdirmaGorunumuAc(sorgu) {
+  const pencere = window.open(`${API}/api/export/html?${sorgu}`, "_blank");
+  if (pencere) {
+    toast("PDF motoru yok — yazdırma görünümü açıldı. Cmd/Ctrl+P ile PDF olarak kaydedebilirsiniz.", "info", 9000);
+  } else {
+    toast("Yazdırma görünümü açılamadı (açılır pencere engellenmiş olabilir).", "error", 9000);
+  }
+}
+
 async function exportPdf() {
   const btn = document.getElementById("btnExportPdf");
+  const sorgu = `durum=aktif&unite=${encodeURIComponent(aktifUnite)}`;
   btn.disabled = true; btn.textContent = "Hazırlanıyor…";
-  toast("PDF hazırlanıyor (Chromium)…", "info", 12000);
+  toast("PDF hazırlanıyor…", "info", 12000);
   try {
     const token = localStorage.getItem("vizit_token");
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    const res = await fetch(`${API}/api/export/pdf?durum=aktif&unite=${encodeURIComponent(aktifUnite)}`, { headers });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "PDF hatası"); }
+    const res = await fetch(`${API}/api/export/pdf?${sorgu}`, { headers });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      // 503 = PDF motoru yüklenemedi; yazdırma görünümüne düş
+      if (res.status === 503) { toast("PDF hatası: " + (e.detail || ""), "error", 12000); yazdirmaGorunumuAc(sorgu); return; }
+      throw new Error(e.detail || "PDF hatası");
+    }
     const blob = await res.blob();
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
@@ -2003,7 +2056,11 @@ async function exportPdfTekHasta(id) {
     const token = localStorage.getItem("vizit_token");
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
     const res = await fetch(`${API}/api/export/pdf?hasta_ids=${id}`, { headers });
-    if (!res.ok) throw new Error("PDF oluşturulamadı");
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      if (res.status === 503) { toast("PDF hatası: " + (e.detail || ""), "error", 12000); yazdirmaGorunumuAc(`hasta_ids=${id}`); return; }
+      throw new Error(e.detail || "PDF oluşturulamadı");
+    }
     const blob = await res.blob();
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a"); a.href = url;

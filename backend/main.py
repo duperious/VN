@@ -583,6 +583,61 @@ def epikriz_not_sil(epikriz_id: int):
 # ── PDF EXPORT ───────────────────────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _export_hastalari(durum: Optional[str], hasta_ids: Optional[str], unite: Optional[str]) -> list:
+    """Export uç noktalarının ortak hasta listesi sorgusu."""
+    conn = get_connection()
+    try:
+        conditions = []
+        params = []
+
+        if hasta_ids:
+            id_list = [int(x.strip()) for x in hasta_ids.split(",") if x.strip()]
+            placeholders = ",".join("?" * len(id_list))
+            sql = f"SELECT * FROM hastalar WHERE id IN ({placeholders}) ORDER BY CAST(yatak_no AS INTEGER)"
+            rows = conn.execute(sql, id_list).fetchall()
+        else:
+            if durum and durum != "tumu":
+                conditions.append("durum = ?")
+                params.append(durum)
+            if unite:
+                conditions.append("unite = ?")
+                params.append(unite)
+            where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+            sql = f"SELECT * FROM hastalar {where} ORDER BY unite, CAST(yatak_no AS INTEGER)"
+            rows = conn.execute(sql, params).fetchall()
+
+        hastalar = []
+        for row in rows:
+            h = dict(row)
+            epikriz = conn.execute(
+                "SELECT * FROM epikriz_notlari WHERE hasta_id = ? ORDER BY tarih ASC",
+                (row["id"],),
+            ).fetchall()
+            h["epikriz_notlari"] = [dict(e) for e in epikriz]
+            hastalar.append(h)
+        return hastalar
+    finally:
+        conn.close()
+
+
+@app.get("/api/export/html", dependencies=[Depends(get_current_user)], tags=["Export"])
+def export_html(
+    durum: Optional[str] = Query("aktif"),
+    hasta_ids: Optional[str] = Query(None),
+    unite: Optional[str] = Query(None),
+):
+    """
+    Yazdırma görünümü — PDF ile aynı şablon, ama WeasyPrint gerektirmez.
+    Tarayıcıdan Cmd/Ctrl+P ile PDF olarak kaydedilebilir; sistem kütüphanesi
+    eksik olan makinelerde PDF indirmenin yedek yolu.
+    """
+    from pdf_export import uret_html
+
+    hastalar = _export_hastalari(durum, hasta_ids, unite)
+    html = uret_html(hastalar, unite or "")
+    return Response(content=html, media_type="text/html; charset=utf-8")
+
+
 @app.get("/api/export/pdf", dependencies=[Depends(get_current_user)], tags=["Export"])
 def export_pdf(
     durum: Optional[str] = Query("aktif"),

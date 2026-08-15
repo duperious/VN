@@ -1045,6 +1045,18 @@ main {
 .inot-chip.dusuk,
 .inot-chip.yuksek   { background: var(--clr-vent-bg);    border-color: var(--clr-vent);    color: var(--clr-vent); }
 
+/* ── Kültür özeti (hasta kartı) ──────────────────────────────────────────── */
+.kultur-satiri {
+  display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
+  margin-top: 5px; font-size: 0.75rem;
+}
+.kultur-chip {
+  padding: 2px 7px; border-radius: 999px; font-size: 0.72rem; white-space: nowrap;
+}
+.kultur-chip.bekliyor { background: var(--clr-warn-bg);    border: 1px solid var(--clr-warn);    color: var(--clr-warn); }
+.kultur-chip.temiz    { background: var(--clr-success-bg); border: 1px solid var(--clr-success); color: var(--clr-success); }
+.kultur-chip.ureme    { background: var(--clr-vent-bg);    border: 1px solid var(--clr-vent);    color: var(--clr-vent); font-weight: 600; }
+
 /* ── Sedasyon özeti (hasta kartı) ────────────────────────────────────────── */
 .sed-satiri {
   display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
