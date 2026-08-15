@@ -126,9 +126,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS — varsayılan: çapraz kaynak erişim yok.
+# Arayüz API ile aynı adresten sunulduğu için tarayıcı bu istekleri CORS'a hiç
+# sokmaz; boş liste normal kullanımı etkilemez. Arayüz ayrı bir adreste
+# barındırılacaksa .env içinde tanımlayın:
+#   ALLOWED_ORIGINS=https://vizit.ornek.com,https://ikinci.ornek.com
+_origins_ham = os.getenv("ALLOWED_ORIGINS", "").strip()
+ALLOWED_ORIGINS = [o.strip() for o in _origins_ham.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    # Çerezli isteklere yalnızca açıkça izin verilen adresler için izin ver.
+    # "*" ile birlikte asla açılmamalı.
+    allow_credentials=bool(ALLOWED_ORIGINS),
     allow_methods=["*"],
     allow_headers=["*"],
 )
