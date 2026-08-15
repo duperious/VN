@@ -82,6 +82,8 @@ VIZIT_TEMPLATE = """
   .kd-value { font-size: 8.5pt; color: #111827; white-space: pre-wrap; }
   .kd-value.bos { color: #9ca3af; font-style: italic; }
   .kd-alt { font-size: 7pt; color: #6b7280; font-weight: normal; }
+  /* İlaç satırları: pre-wrap kapalı, tek satırda kompakt dursun */
+  .ilac-satir { white-space: normal; line-height: 1.25; margin-bottom: 1px; }
   .doz-aralikta { color: #047857; font-weight: 700; }
   .doz-dusuk, .doz-yuksek { color: #b91c1c; font-weight: 700; }
   .kd-value.vent-renk { color: #dc2626; font-weight: 600; }
@@ -193,18 +195,13 @@ VIZIT_TEMPLATE = """
       <div class="kd-alan">
         <div class="kd-label">İnotrop / Vazopressör</div>
         {% if kd.inot_var and kd.inot_ozetleri %}
+          {# Tek satırda tutuluyor: .kd-value pre-wrap olduğu için şablondaki
+             satır sonları çıktıda gerçek satır atlamasına dönüşür. #}
           {% for o in kd.inot_ozetleri %}
             {% if o.tabloda %}
-              <div class="kd-value inot-renk">{{ o.ajan }}{% if o.carpan > 1 %} x{{ o.carpan }}{% endif %}{% if o.hiz_cc_saat is not none %} — {{ o.hiz_cc_saat | sayi }} cc/h{% endif %}
-                {% if o.doz is not none %}
-                  <span class="doz-{{ o.durum }}">{{ o.doz | sayi(3) }} {{ o.doz_birimi }}</span>
-                {% elif o.metin %}
-                  {{ o.metin }}
-                {% endif %}
-                <br><span class="kd-alt">{{ o.miktar | sayi }} {{ o.miktar_birimi }}/{{ o.hacim_cc | sayi }} cc · aralık {{ o.min_doz | sayi }}-{{ o.max_doz | sayi }} {{ o.doz_birimi }}</span>
-              </div>
+              <div class="kd-value inot-renk ilac-satir">{{ o.ajan }}{% if o.carpan > 1 %} x{{ o.carpan }}{% endif %}{% if o.hiz_cc_saat is not none %} {{ o.hiz_cc_saat | sayi }} cc/h{% endif %}{% if o.doz is not none %} <span class="doz-{{ o.durum }}">{{ o.doz | sayi(3) }} {{ o.doz_birimi }}</span>{% elif o.metin %} {{ o.metin }}{% endif %} <span class="kd-alt">({{ o.miktar | sayi }}{{ o.miktar_birimi }}/{{ o.hacim_cc | sayi }}cc · {{ o.min_doz | sayi }}-{{ o.max_doz | sayi }})</span></div>
             {% else %}
-              <div class="kd-value inot-renk">{{ o.ajan }}{% if o.metin %} {{ o.metin }}{% endif %}</div>
+              <div class="kd-value inot-renk ilac-satir">{{ o.ajan }}{% if o.metin %} {{ o.metin }}{% endif %}</div>
             {% endif %}
           {% endfor %}
         {% elif kd.inot_var %}
@@ -217,7 +214,7 @@ VIZIT_TEMPLATE = """
         <div class="kd-label">Sedasyon</div>
         {% if kd.sed_var and kd.sed_ajanlar %}
           {% for a in kd.sed_ajanlar %}
-            <div class="kd-value sed-renk">{{ a.ajan }}{% if a.hiz_cc_saat is not none %} — {{ a.hiz_cc_saat | sayi }} cc/h{% elif a.doz %} {{ a.doz }}{% endif %}</div>
+            <div class="kd-value sed-renk ilac-satir">{{ a.ajan }}{% if a.hiz_cc_saat is not none %} {{ a.hiz_cc_saat | sayi }} cc/h{% elif a.doz %} {{ a.doz }}{% endif %}</div>
           {% endfor %}
         {% elif kd.sed_var %}
           <div class="kd-value sed-renk">Kullanılıyor</div>
@@ -227,9 +224,7 @@ VIZIT_TEMPLATE = """
       </div>
       <div class="kd-alan">
         <div class="kd-label">Beslenme</div>
-        <div class="kd-value {% if not kd.beslenme or kd.beslenme == 'Yok' %}bos{% endif %}">
-          {{ kd.beslenme or '—' }}{% if kd.beslenme_yollari %} ({{ kd.beslenme_yollari | join('/') }}){% endif %}
-        </div>
+        <div class="kd-value ilac-satir {% if not kd.beslenme or kd.beslenme == 'Yok' %}bos{% endif %}">{{ kd.beslenme or '—' }}{% if kd.beslenme_yollari %} ({{ kd.beslenme_yollari | join('/') }}){% endif %}</div>
         {% if hasta.kalori %}
           <div class="kd-alt">{{ hasta.kalori.min }}–{{ hasta.kalori.max }} kcal/gün</div>
         {% endif %}
@@ -329,24 +324,9 @@ VIZIT_TEMPLATE = """
       </div>
       {% endfor %}
 
+      {# Her kültür tek satırda: tür, tarih ve sonuç yan yana #}
       {% for k in hasta.kultur_takibi %}
-      <div class="ek-satir" style="align-items:flex-start; flex-direction:column; padding-bottom:4px; border-bottom:1px solid #eee; margin-top:2px;">
-        <div style="display:flex; width:100%; justify-content:space-between; margin-bottom:1px;">
-          <span><strong>🧫 {{ k.tur }} Kx.</strong> <span class="ek-tarih" style="width:auto; margin-left:8px;">{{ k.tarih or '—' }}</span></span>
-        </div>
-        <div style="font-size:8.5pt;">
-          {% if not k.sonuc or k.sonuc == 'Bekleniyor' %}
-            <span style="color:#d97706;">Sonuç Bekleniyor</span>
-          {% else %}
-            <span>Sonuç: {{ k.sonuc }}</span>
-          {% endif %}
-        </div>
-        {% if k.antibiyotik_adi %}
-        <div style="font-size:8.5pt; color:#059669;">
-          💊 AB: {{ k.antibiyotik_adi }} {% if k.ab_gun %}({{ k.ab_gun }}){% endif %}
-        </div>
-        {% endif %}
-      </div>
+      <div class="ek-satir"><span class="ek-tarih" style="min-width:58px;">{{ k.tarih or '—' }}</span><span><strong>🧫 {{ k.tur }} Kx.</strong> {% if not k.sonuc or k.sonuc == 'Bekleniyor' %}<span style="color:#d97706;">Sonuç Bekleniyor</span>{% else %}<span>{{ k.sonuc }}</span>{% endif %}{% if k.antibiyotik_adi %} <span style="color:#059669;">💊 {{ k.antibiyotik_adi }}{% if k.ab_gun %} ({{ k.ab_gun }}){% endif %}</span>{% endif %}</span></div>
       {% endfor %}
     </div>
     {% endif %}
