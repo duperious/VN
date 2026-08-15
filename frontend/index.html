@@ -152,6 +152,23 @@
               <input class="form-input" type="text" id="fTani" placeholder="Kabul tanısı…" />
             </div>
           </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="fKilo">Kilo (kg)</label>
+              <input class="form-input" type="number" id="fKilo" step="any" min="0"
+                     placeholder="örn. 70" oninput="antropometriGuncelle()" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="fBoy">Boy (cm)</label>
+              <input class="form-input" type="number" id="fBoy" step="any" min="0"
+                     placeholder="örn. 170" oninput="antropometriGuncelle()" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group" style="grid-column:1/-1;">
+              <div id="antropometriKutu" class="antropometri-kutu" style="display:none;"></div>
+            </div>
+          </div>
         </div>
 
         <!-- KLİNİK DURUM -->

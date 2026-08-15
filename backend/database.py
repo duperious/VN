@@ -74,6 +74,8 @@ def init_db():
         "antibiyotikler": "TEXT DEFAULT '[]'",
         "cikis_turu":     "TEXT",
         "cikis_detayi":   "TEXT",
+        "kilo":           "REAL",
+        "boy":            "REAL",
     }
     # Eski tek-alan compat: ventilator/inotrop/ventilator_detay/inotrop_detay geride kalabilir
     for sutun, tanim in eklenecekler.items():

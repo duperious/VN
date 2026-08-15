@@ -254,6 +254,8 @@ def _hasta_to_db_params(hasta: HastaBase) -> tuple:
         hasta.yatak_no,
         hasta.ad_soyad,
         hasta.tani or "",
+        hasta.kilo,
+        hasta.boy,
         hasta.kabul_epikrizi or "",
         kd_json,
         json.dumps([i.model_dump() if hasattr(i, "model_dump") else i for i in (hasta.planlanan_islemler or [])], ensure_ascii=False),
@@ -316,12 +318,12 @@ def hasta_ekle(hasta: HastaCreate):
         cur = conn.execute(
             """
             INSERT INTO hastalar (
-                unite, yatak_no, ad_soyad, tani,
+                unite, yatak_no, ad_soyad, tani, kilo, boy,
                 kabul_epikrizi, klinik_durum,
                 planlanan_islemler, goruntuleme_tetkik, kultur_takibi,
                 antibiyotikler,
                 genel_not, cikis_turu, cikis_detayi, durum
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (*params, "aktif"),
         )
@@ -375,6 +377,7 @@ def hasta_guncelle(hasta_id: int, hasta: HastaUpdate):
             """
             UPDATE hastalar SET
                 unite = ?, yatak_no = ?, ad_soyad = ?, tani = ?,
+                kilo = ?, boy = ?,
                 kabul_epikrizi = ?, klinik_durum = ?,
                 planlanan_islemler = ?, goruntuleme_tetkik = ?, kultur_takibi = ?,
                 antibiyotikler = ?,

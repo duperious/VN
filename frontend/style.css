@@ -980,9 +980,89 @@ main {
 .ajan-adi { flex: 1.5; }
 .ajan-doz { flex: 1; }
 
+/* ── Kilo / boy → VKİ ve kalori kutusu ───────────────────────────────────── */
+.antropometri-kutu {
+  display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+  padding: 8px 12px; margin-top: 2px;
+  background: var(--clr-surface2); border: 1px solid var(--clr-border);
+  border-radius: var(--radius-sm); font-size: 0.82rem; color: var(--clr-text);
+}
+.antropometri-kutu .antro-etiket { color: var(--clr-text-muted); font-size: 0.76rem; margin-left: 4px; }
+.antropometri-kutu .antro-uyari  { color: var(--clr-warn); font-size: 0.76rem; width: 100%; }
+
+/* ── İnotrop satırı (form içi) ───────────────────────────────────────────── */
+.ajan-item.ajan-inot { display: block; padding: 10px; }
+.ajan-inot-ust { display: flex; gap: 8px; align-items: center; }
+.ajan-inot-ust .ajan-adi { flex: 1; }
+.ajan-item.ajan-inot .form-select {
+  background: var(--clr-bg); border: 1px solid var(--clr-border);
+  border-radius: var(--radius-sm); padding: 5px 8px;
+}
+.ajan-hazirlik {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 8px; margin-top: 8px;
+}
+.ajan-diger { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.ajan-mini {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 0.7rem; color: var(--clr-text-muted); text-transform: uppercase; letter-spacing: .3px;
+}
+.ajan-birimli { display: flex; align-items: baseline; gap: 4px; }
+.ajan-birimli .form-input {
+  background: transparent; border: none; border-bottom: 1px solid var(--clr-border);
+  border-radius: 0; padding: 3px 0; min-height: auto; width: 100%;
+}
+.ajan-birimli .form-input:focus { box-shadow: none; border-bottom-color: var(--clr-primary); }
+.ajan-birimli > span {
+  font-size: 0.72rem; color: var(--clr-text-muted); white-space: nowrap;
+  text-transform: none; letter-spacing: 0;
+}
+
+/* Hesaplanan doz — aralıkta yeşil, dışındaysa kırmızı */
+.ajan-sonuc {
+  margin-top: 8px; padding: 6px 10px; border-radius: var(--radius-sm);
+  font-size: 0.82rem; border: 1px solid transparent;
+}
+.ajan-sonuc .ajan-aralik {
+  display: block; font-size: 0.72rem; opacity: 0.85; margin-top: 2px; font-weight: normal;
+}
+.ajan-sonuc.aralikta { background: var(--clr-success-bg); border-color: var(--clr-success); color: var(--clr-success); }
+.ajan-sonuc.dusuk,
+.ajan-sonuc.yuksek   { background: var(--clr-vent-bg);    border-color: var(--clr-vent);    color: var(--clr-vent); }
+.ajan-sonuc.uyari    { background: var(--clr-warn-bg);    border-color: var(--clr-warn);    color: var(--clr-warn); }
+
+/* ── İnotrop özeti (hasta kartı) ─────────────────────────────────────────── */
+.inot-satiri {
+  display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
+  margin-top: 6px; font-size: 0.75rem; color: var(--clr-inot);
+}
+.inot-chip {
+  padding: 2px 7px; border-radius: 999px; font-size: 0.72rem;
+  background: var(--clr-inot-bg); border: 1px solid var(--clr-inot); color: var(--clr-inot);
+  white-space: nowrap;
+}
+.inot-chip.aralikta { background: var(--clr-success-bg); border-color: var(--clr-success); color: var(--clr-success); }
+.inot-chip.dusuk,
+.inot-chip.yuksek   { background: var(--clr-vent-bg);    border-color: var(--clr-vent);    color: var(--clr-vent); }
+
+/* ── İnotrop detayı (detay modalı) ───────────────────────────────────────── */
+.inot-detay-satir { padding: 3px 0; line-height: 1.35; }
+.inot-detay-satir + .inot-detay-satir { border-top: 1px dotted var(--clr-border); }
+.inot-detay-satir small {
+  display: block; font-weight: normal; font-size: 0.7rem;
+  color: var(--clr-text-muted); margin-top: 1px;
+}
+.inot-doz { font-weight: 700; margin-left: 4px; }
+.inot-doz.aralikta { color: var(--clr-success); }
+.inot-doz.dusuk,
+.inot-doz.yuksek   { color: var(--clr-vent); }
+.inot-doz.uyari    { color: var(--clr-warn); font-weight: normal; font-size: 0.78rem; }
+
 @media (max-width: 768px) {
   .unite-nav { gap: 2px; }
   .unite-btn { padding: 5px 7px; font-size: 0.72rem; }
   .klinik-durum-grid { grid-template-columns: 1fr 1fr; }
   .form-row.triple { grid-template-columns: 1fr; }
+  .ajan-hazirlik { grid-template-columns: 1fr 1fr; }
+  .ajan-diger { grid-template-columns: 1fr; }
 }

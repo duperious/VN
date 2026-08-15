@@ -39,9 +39,19 @@ class Antibiyotik(BaseModel):
 
 
 class InotropAjan(BaseModel):
-    """Tek bir inotrop/sedasyon ajanı."""
+    """
+    Tek bir inotrop/sedasyon ajanı.
+
+    Tablodaki ilaçlar (bkz. ilaclar.py) için hazırlık bilgisi ve pompa hızı
+    tutulur; uygulanan doz bunlardan hesaplanır, saklanmaz. "Diğer" seçeneği
+    ve eski kayıtlar için serbest metin `doz` alanı korunur.
+    """
     ajan: str = ""
-    doz: str = ""
+    doz: str = ""                              # serbest metin (Diğer / eski kayıtlar)
+    carpan: int = 1                            # hazırlık katı: x1 | x2 | x4
+    hacim_cc: Optional[float] = None           # sulandırma hacmi (varsayılan 100)
+    miktar: Optional[float] = None             # torbadaki toplam mg (vazopressinde ünite)
+    hiz_cc_saat: Optional[float] = None        # pompa hızı
 
 
 class KlinikDurum(BaseModel):
@@ -96,6 +106,8 @@ class HastaBase(BaseModel):
     yatak_no: str
     ad_soyad: str
     tani: Optional[str] = ""
+    kilo: Optional[float] = None      # kg — VKİ, kalori ve inotrop dozu için
+    boy: Optional[float] = None       # cm
     kabul_epikrizi: Optional[str] = ""
     klinik_durum: Optional[KlinikDurum] = Field(default_factory=KlinikDurum)
     planlanan_islemler: Optional[List[PlanlananIslem]] = Field(default_factory=list)

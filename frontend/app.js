@@ -17,6 +17,127 @@ const UNITE_KONFIG = {
 };
 const UNITE_LISTESI = Object.keys(UNITE_KONFIG);
 
+// ── İNOTROP / VAZOPRESSÖR HAZIRLIK TABLOSU ──────────────────────────────────
+// DİKKAT: backend/ilaclar.py içindeki ILAC_TABLOSU ile birebir aynı olmalıdır.
+// Biri değişirse diğeri de değişmeli (PDF çıktısı backend tablosunu kullanır).
+// baz_miktar = x1 hazırlıkta hacim_cc içine konan miktar.
+const ILAC_TABLOSU = {
+  "Noradrenalin": { baz_miktar: 8,   hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 0.1,  max_doz: 4,    kilo_bazli: true  },
+  "Adrenalin":    { baz_miktar: 8,   hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 0.05, max_doz: 2,    kilo_bazli: true  },
+  "Dopamin":      { baz_miktar: 400, hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 3,    max_doz: 20,   kilo_bazli: true  },
+  "Dobutamin":    { baz_miktar: 500, hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 2,    max_doz: 20,   kilo_bazli: true  },
+  "Vazopressin":  { baz_miktar: 20,  hacim_cc: 100, miktar_birimi: "ünite", doz_birimi: "ünite/dk",  min_doz: 0.01, max_doz: 0.07, kilo_bazli: false },
+};
+const ILAC_LISTESI = Object.keys(ILAC_TABLOSU);
+const CARPANLAR = [1, 2, 4];
+
+// ESPEN yoğun bakım: 25-30 kcal/kg/gün
+const KCAL_MIN_PER_KG = 25;
+const KCAL_MAX_PER_KG = 30;
+
+// ── Hesap yardımcıları ──────────────────────────────────────────────────────
+
+function sayi(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const f = parseFloat(String(v).replace(",", "."));
+  return isNaN(f) ? null : f;
+}
+
+/**
+ * Uygulanan dozu hesaplar.
+ *   konsantrasyon (mcg/cc) = miktar_mg * 1000 / hacim_cc
+ *   doz (mcg/kg/dk)        = hiz * konsantrasyon / (60 * kilo)
+ * Vazopressin kilo bazlı değildir: doz (ünite/dk) = hiz * (ünite/cc) / 60
+ */
+function dozHesapla(ajan, miktar, hacimCc, hizCcSaat, kilo) {
+  const bilgi = ILAC_TABLOSU[ajan];
+  if (!bilgi) return { doz: null, birim: "", durum: null };
+  const m = sayi(miktar), hac = sayi(hacimCc), hiz = sayi(hizCcSaat), kg = sayi(kilo);
+  const sonuc = { doz: null, birim: bilgi.doz_birimi, durum: null,
+                  min_doz: bilgi.min_doz, max_doz: bilgi.max_doz };
+  if (!m || !hac || hiz === null) return sonuc;
+
+  let doz;
+  if (bilgi.kilo_bazli) {
+    if (!kg) return sonuc;                       // kilo yoksa hesaplanamaz
+    doz = (hiz * ((m * 1000) / hac)) / (60 * kg);
+  } else {
+    doz = (hiz * (m / hac)) / 60;
+  }
+  sonuc.doz = doz;
+  sonuc.durum = doz < bilgi.min_doz ? "dusuk" : doz > bilgi.max_doz ? "yuksek" : "aralikta";
+  return sonuc;
+}
+
+/** Hedef doz için gereken pompa hızı (cc/saat). */
+function hizHesapla(ajan, hedefDoz, miktar, hacimCc, kilo) {
+  const bilgi = ILAC_TABLOSU[ajan];
+  const m = sayi(miktar), hac = sayi(hacimCc), kg = sayi(kilo), hedef = sayi(hedefDoz);
+  if (!bilgi || hedef === null || !m || !hac) return null;
+  if (bilgi.kilo_bazli) {
+    if (!kg) return null;
+    return (hedef * kg * 60) / ((m * 1000) / hac);
+  }
+  return (hedef * 60) / (m / hac);
+}
+
+function vkiHesapla(kilo, boyCm) {
+  const kg = sayi(kilo), boy = sayi(boyCm);
+  if (!kg || !boy) return null;
+  const m = boy / 100;
+  return kg / (m * m);
+}
+
+function vkiSinifi(vki) {
+  if (vki === null) return "";
+  if (vki < 18.5) return "Zayıf";
+  if (vki < 25)   return "Normal";
+  if (vki < 30)   return "Fazla kilolu";
+  if (vki < 35)   return "Obez (sınıf I)";
+  if (vki < 40)   return "Obez (sınıf II)";
+  return "Obez (sınıf III)";
+}
+
+function kaloriIhtiyaci(kilo) {
+  const kg = sayi(kilo);
+  if (!kg) return null;
+  return { min: Math.round(kg * KCAL_MIN_PER_KG), max: Math.round(kg * KCAL_MAX_PER_KG) };
+}
+
+/**
+ * Sayıyı okunur biçimde kısaltır (0,1 / 12,5 / 1667).
+ * Sondaki sıfırlar YALNIZCA ondalık kısımda kırpılır — aksi halde 100 → 1 olurdu.
+ */
+function dozYaz(v, basamak = 2) {
+  if (v === null || v === undefined || v === "") return "";
+  let s = Number(v).toFixed(basamak);
+  if (s.includes(".")) s = s.replace(/0+$/, "").replace(/\.$/, "");
+  return s.replace(".", ",");
+}
+
+/**
+ * Kaydedilmiş bir inotrop kaydını kart/detay/PDF'te gösterilecek metne çevirir.
+ * Tabloda olmayan ajanlar (Diğer / eski kayıtlar) serbest metin olarak döner.
+ */
+function inotOzeti(a, kilo) {
+  const bilgi = ILAC_TABLOSU[a?.ajan];
+  if (!bilgi) {
+    return { tabloda: false, ajan: a?.ajan || "", metin: a?.doz || "", durum: null };
+  }
+  const carpan = a.carpan || 1;
+  const miktar = sayi(a.miktar) || bilgi.baz_miktar * carpan;
+  const hacim  = sayi(a.hacim_cc) || bilgi.hacim_cc;
+  const h = dozHesapla(a.ajan, miktar, hacim, a.hiz_cc_saat, kilo);
+  return {
+    tabloda: true, ajan: a.ajan, carpan, miktar, hacim,
+    miktar_birimi: bilgi.miktar_birimi,
+    hiz: sayi(a.hiz_cc_saat),
+    doz: h.doz, doz_birimi: h.birim, durum: h.durum,
+    min_doz: bilgi.min_doz, max_doz: bilgi.max_doz,
+    metin: a.doz || "",   // hız girilmemiş eski kayıtların serbest metin dozu
+  };
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // ── GLOBAL DURUM
 // ════════════════════════════════════════════════════════════════════════════
@@ -456,6 +577,29 @@ function renderKart(h) {
   if (klDurum.ir_pupil) klBilgi.push(`<span style="color:var(--clr-text-muted);font-size:.75rem">👁 ${escHtml(klDurum.ir_pupil)}</span>`);
   const klBilgiHtml = klBilgi.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:5px;">${klBilgi.join("")}</div>` : "";
 
+  // İnotrop özeti — ilaç, hazırlık katı, pompa hızı ve hesaplanan doz
+  let inotHtml = "";
+  const inotAjanlari = (klDurum.inot_ajanlar || []).filter(a => a && a.ajan);
+  if (klDurum.inot_var && inotAjanlari.length) {
+    const chipler = inotAjanlari.map(a => {
+      const o = inotOzeti(a, h.kilo);
+      if (!o.tabloda) {
+        return `<span class="inot-chip">${escHtml(o.ajan)}${o.metin ? " " + escHtml(o.metin) : ""}</span>`;
+      }
+      const parca = [escHtml(o.ajan)];
+      if (o.carpan > 1) parca.push(`x${o.carpan}`);
+      if (o.hiz !== null) parca.push(`${dozYaz(o.hiz, 1)} cc/h`);
+      const dozStr = o.doz !== null
+        ? ` → ${dozYaz(o.doz, 3)} ${o.doz_birimi}`
+        : (o.metin ? ` ${escHtml(o.metin)}` : "");
+      const baslik = o.doz !== null
+        ? `${o.ajan} — ${o.miktar} ${o.miktar_birimi}/${o.hacim} cc · aralık ${o.min_doz}-${o.max_doz} ${o.doz_birimi}`
+        : `${o.ajan} — hesap için kilo ve hız gerekli`;
+      return `<span class="inot-chip ${o.durum || ""}" title="${escHtml(baslik)}">${parca.join(" ")}${dozStr}</span>`;
+    }).join("");
+    inotHtml = `<div class="inot-satiri">💉 ${chipler}</div>`;
+  }
+
   return `
     <div class="hasta-kart ${yaklasan && !isTaburcu ? "yaklasan-islem" : ""} ${isTaburcu ? "taburcu" : ""}"
          onclick="hastaDetayAc(${h.id})" role="article"
@@ -470,6 +614,7 @@ function renderKart(h) {
       </div>
       <div class="kart-body">
         ${klBilgiHtml}
+        ${inotHtml}
         ${kulturBadge}
         ${notOnizleme}
         ${yakBadge}
@@ -600,13 +745,17 @@ function formTemizle() {
   document.getElementById("antibiyotikList").innerHTML = "";
   document.getElementById("inotAjanList").innerHTML = "";
   document.getElementById("sedAjanList").innerHTML  = "";
+  antropometriGuncelle();
 }
 
 function formDoldur(h) {
   document.getElementById("fAdSoyad").value       = h.ad_soyad || "";
   document.getElementById("fTani").value          = h.tani || "";
+  document.getElementById("fKilo").value          = h.kilo ?? "";
+  document.getElementById("fBoy").value           = h.boy ?? "";
   document.getElementById("fKabulEpikrizi").value = h.kabul_epikrizi || "";
   document.getElementById("fGenelNot").value      = h.genel_not || "";
+  antropometriGuncelle();
 
   const klDurum = h.klinik_durum || {};
 
@@ -637,15 +786,24 @@ function formDoldur(h) {
     });
   }
 
-  // İnotrop
+  // İnotrop — updateToggle liste boşsa otomatik boş satır ekler; kayıtlı ajan
+  // varsa o boş satırı atıp yerine kayıtlıları koy (yoksa formda boş satır kalır)
   document.getElementById("fInotVar").checked = !!klDurum.inot_var;
   updateToggle("inot");
-  (klDurum.inot_ajanlar || []).forEach(a => ajanEkle("inot", a));
+  const inotKayitli = klDurum.inot_ajanlar || [];
+  if (inotKayitli.length) {
+    document.getElementById("inotAjanList").innerHTML = "";
+    inotKayitli.forEach(a => ajanEkle("inot", a));
+  }
 
   // Sedasyon
   document.getElementById("fSedVar").checked = !!klDurum.sed_var;
   updateToggle("sed");
-  (klDurum.sed_ajanlar || []).forEach(a => ajanEkle("sed", a));
+  const sedKayitli = klDurum.sed_ajanlar || [];
+  if (sedKayitli.length) {
+    document.getElementById("sedAjanList").innerHTML = "";
+    sedKayitli.forEach(a => ajanEkle("sed", a));
+  }
 
   // Beslenme / Diürez / IR
   document.getElementById("fBeslenme").value = klDurum.beslenme || "Yok";
@@ -730,20 +888,193 @@ function vaskulerToggle(tip) {
   if (m.div) document.getElementById(m.div).style.display = aktif ? "block" : "none";
 }
 
-// Ajan ekle/çıkar (inot / sed)
+// ── Kilo / boy → VKİ ve kalori kutusu ───────────────────────────────────────
+function antropometriGuncelle() {
+  const kilo = sayi(document.getElementById("fKilo")?.value);
+  const boy  = sayi(document.getElementById("fBoy")?.value);
+  const kutu = document.getElementById("antropometriKutu");
+  if (!kutu) return;
+
+  const parcalar = [];
+  const vki = vkiHesapla(kilo, boy);
+  if (vki !== null) {
+    parcalar.push(`<span><strong>VKİ:</strong> ${dozYaz(vki, 1)} kg/m² <span class="antro-etiket">${vkiSinifi(vki)}</span></span>`);
+  }
+  const kcal = kaloriIhtiyaci(kilo);
+  if (kcal) {
+    parcalar.push(`<span><strong>Günlük kalori:</strong> ${kcal.min}–${kcal.max} kcal/gün <span class="antro-etiket">${KCAL_MIN_PER_KG}–${KCAL_MAX_PER_KG} kcal/kg</span></span>`);
+  }
+  if (vki !== null && vki >= 30) {
+    parcalar.push(`<span class="antro-uyari">⚠ VKİ ≥ 30 — obezitede düzeltilmiş vücut ağırlığı üzerinden hesap önerilir</span>`);
+  }
+
+  kutu.innerHTML = parcalar.join("");
+  kutu.style.display = parcalar.length ? "flex" : "none";
+
+  // Kilo değişince açık inotrop satırlarının dozu da değişir
+  document.querySelectorAll("#inotAjanList .ajan-item").forEach(el => inotHesapla(el.dataset.uid));
+}
+
+// ── Ajan ekle/çıkar (inot / sed) ────────────────────────────────────────────
+let _ajanSayac = 0;
+
 function ajanEkle(tip, data = null) {
-  const listId = tip + "AjanList";
-  const liste = document.getElementById(listId);
-  const idx = Date.now();
+  const liste = document.getElementById(tip + "AjanList");
+  if (!liste) return;
   const div = document.createElement("div");
-  div.className = "ajan-item";
+
+  // Sedasyon: serbest metin (ajan + doz) — değişmedi
+  if (tip !== "inot") {
+    div.className = "ajan-item";
+    div.innerHTML = `
+      <input class="form-input ajan-adi" type="text" placeholder="Ajan adı (örn. Midazolam)"
+             value="${escHtml(data?.ajan || "")}" data-field="ajan" />
+      <input class="form-input ajan-doz" type="text" placeholder="Doz (örn. 5 mg/saat)"
+             value="${escHtml(data?.doz || "")}" data-field="doz" />
+      <button type="button" class="btn-remove-item" onclick="this.parentElement.remove()" title="Kaldır">✕</button>`;
+    liste.appendChild(div);
+    return;
+  }
+
+  // İnotrop: hazırlık + hız + canlı doz hesabı
+  const uid = "ia" + (++_ajanSayac);
+  const secili = data?.ajan || "";
+  const tablodaVar = !!ILAC_TABLOSU[secili];
+  const digerMi = !!secili && !tablodaVar;
+  const carpan = data?.carpan || 1;
+
+  div.className = "ajan-item ajan-inot";
+  div.dataset.uid = uid;
   div.innerHTML = `
-    <input class="form-input ajan-adi" type="text" placeholder="Ajan adı (örn. Noradrenalin)"
-           value="${escHtml(data?.ajan || "")}" data-tip="${tip}" data-field="ajan" />
-    <input class="form-input ajan-doz" type="text" placeholder="Doz (örn. 0.2 mcg/kg/dk)"
-           value="${escHtml(data?.doz || "")}" data-tip="${tip}" data-field="doz" />
-    <button type="button" class="btn-remove-item" onclick="this.parentElement.remove()" title="Kaldır">✕</button>`;
+    <div class="ajan-inot-ust">
+      <select class="form-select ajan-adi" onchange="inotAjanDegisti('${uid}')">
+        <option value="">— İlaç seçin —</option>
+        ${ILAC_LISTESI.map(i => `<option value="${i}" ${i === secili ? "selected" : ""}>${i}</option>`).join("")}
+        <option value="__diger__" ${digerMi ? "selected" : ""}>Diğer (elle yaz)</option>
+      </select>
+      <button type="button" class="btn-remove-item" onclick="this.closest('.ajan-item').remove()" title="Kaldır">✕</button>
+    </div>
+
+    <div class="ajan-hazirlik" style="display:${tablodaVar ? "grid" : "none"};">
+      <label class="ajan-mini">Hazırlık
+        <select class="form-select ajan-carpan" onchange="inotCarpanDegisti('${uid}')">
+          ${CARPANLAR.map(c => `<option value="${c}" ${c === carpan ? "selected" : ""}>x${c}</option>`).join("")}
+        </select>
+      </label>
+      <label class="ajan-mini">Hacim
+        <span class="ajan-birimli">
+          <input class="form-input ajan-hacim" type="number" step="any" min="1"
+                 value="${data?.hacim_cc ?? ""}" oninput="inotHesapla('${uid}')" /><span>cc</span>
+        </span>
+      </label>
+      <label class="ajan-mini">Miktar
+        <span class="ajan-birimli">
+          <input class="form-input ajan-miktar" type="number" step="any" min="0"
+                 value="${data?.miktar ?? ""}" oninput="inotHesapla('${uid}')" /><span class="ajan-miktar-birim">mg</span>
+        </span>
+      </label>
+      <label class="ajan-mini">Hız
+        <span class="ajan-birimli">
+          <input class="form-input ajan-hiz" type="number" step="any" min="0"
+                 value="${data?.hiz_cc_saat ?? ""}" oninput="inotHesapla('${uid}')" /><span>cc/h</span>
+        </span>
+      </label>
+    </div>
+
+    <div class="ajan-diger" style="display:${digerMi ? "grid" : "none"};">
+      <input class="form-input ajan-diger-ad" type="text" placeholder="Ajan adı"
+             value="${escHtml(digerMi ? secili : "")}" />
+      <input class="form-input ajan-diger-doz" type="text" placeholder="Doz (örn. 0.1 mcg/kg/dk)"
+             value="${escHtml(data?.doz || "")}" />
+    </div>
+
+    <div class="ajan-sonuc" style="display:none;"></div>`;
+
   liste.appendChild(div);
+  if (tablodaVar) {
+    // Kayıtta hazırlık değeri yoksa tablodaki varsayılanı doldur
+    if (data?.hacim_cc == null) div.querySelector(".ajan-hacim").value = ILAC_TABLOSU[secili].hacim_cc;
+    if (data?.miktar == null)   div.querySelector(".ajan-miktar").value = ILAC_TABLOSU[secili].baz_miktar * carpan;
+  }
+  inotHesapla(uid);
+}
+
+function _ajanSatir(uid) {
+  return document.querySelector(`#inotAjanList .ajan-item[data-uid="${uid}"]`);
+}
+
+/** İlaç seçimi değişti: hazırlık alanlarını tablodaki baz değerlerle doldur. */
+function inotAjanDegisti(uid) {
+  const el = _ajanSatir(uid); if (!el) return;
+  const secim = el.querySelector(".ajan-adi").value;
+  const diger = secim === "__diger__";
+  const bilgi = ILAC_TABLOSU[secim];
+
+  el.querySelector(".ajan-hazirlik").style.display = bilgi ? "grid" : "none";
+  el.querySelector(".ajan-diger").style.display    = diger ? "grid" : "none";
+
+  if (bilgi) {
+    const carpan = parseInt(el.querySelector(".ajan-carpan").value, 10) || 1;
+    el.querySelector(".ajan-hacim").value  = bilgi.hacim_cc;
+    el.querySelector(".ajan-miktar").value = bilgi.baz_miktar * carpan;
+    el.querySelector(".ajan-miktar-birim").textContent = bilgi.miktar_birimi;
+  }
+  inotHesapla(uid);
+}
+
+/** x1/x2/x4 değişti: torbadaki miktarı baz × çarpan olarak güncelle. */
+function inotCarpanDegisti(uid) {
+  const el = _ajanSatir(uid); if (!el) return;
+  const bilgi = ILAC_TABLOSU[el.querySelector(".ajan-adi").value];
+  if (!bilgi) return;
+  const carpan = parseInt(el.querySelector(".ajan-carpan").value, 10) || 1;
+  el.querySelector(".ajan-miktar").value = bilgi.baz_miktar * carpan;
+  inotHesapla(uid);
+}
+
+/** Girilen hıza göre dozu hesaplayıp aralığa göre renklendirir. */
+function inotHesapla(uid) {
+  const el = _ajanSatir(uid); if (!el) return;
+  const kutu = el.querySelector(".ajan-sonuc");
+  const ajan = el.querySelector(".ajan-adi").value;
+  const bilgi = ILAC_TABLOSU[ajan];
+  if (!bilgi) { kutu.style.display = "none"; return; }
+
+  const kilo   = sayi(document.getElementById("fKilo")?.value);
+  const miktar = el.querySelector(".ajan-miktar").value;
+  const hacim  = el.querySelector(".ajan-hacim").value;
+  const hiz    = el.querySelector(".ajan-hiz").value;
+
+  const aralikYazi = `Aralık: ${dozYaz(bilgi.min_doz, 2)}–${dozYaz(bilgi.max_doz, 2)} ${bilgi.doz_birimi}`;
+
+  if (bilgi.kilo_bazli && !kilo) {
+    kutu.className = "ajan-sonuc uyari";
+    kutu.innerHTML = `⚠ Doz hesabı için hastanın kilosunu girin. <span class="ajan-aralik">${aralikYazi}</span>`;
+    kutu.style.display = "block";
+    return;
+  }
+
+  const h = dozHesapla(ajan, miktar, hacim, hiz, kilo);
+  if (h.doz === null) {
+    kutu.className = "ajan-sonuc uyari";
+    kutu.innerHTML = `Hız girin. <span class="ajan-aralik">${aralikYazi}</span>`;
+    kutu.style.display = "block";
+    return;
+  }
+
+  // Referans aralığın karşılığı olan pompa hızı — pompayı ayarlarken yol gösterir
+  const altHiz = hizHesapla(ajan, bilgi.min_doz, miktar, hacim, kilo);
+  const ustHiz = hizHesapla(ajan, bilgi.max_doz, miktar, hacim, kilo);
+  const hizYazi = (altHiz !== null && ustHiz !== null)
+    ? ` · Aralığa karşılık gelen hız: ${dozYaz(altHiz, 1)}–${dozYaz(ustHiz, 1)} cc/h` : "";
+
+  const etiket = h.durum === "aralikta" ? "aralıkta"
+               : h.durum === "dusuk" ? "aralığın ALTINDA" : "aralığın ÜSTÜNDE";
+  kutu.className = `ajan-sonuc ${h.durum}`;
+  kutu.innerHTML =
+    `<strong>${dozYaz(h.doz, 3)} ${h.birim}</strong> — ${etiket}` +
+    `<span class="ajan-aralik">${aralikYazi}${hizYazi}</span>`;
+  kutu.style.display = "block";
 }
 
 function havaYoluDegisti() {
@@ -888,13 +1219,26 @@ async function hastaKaydet(e) {
     });
   }
 
-  // İnotrop ajanlar
+  // İnotrop ajanlar — tablodakiler için hazırlık + hız, "Diğer" için serbest metin
   const inotVar = document.getElementById("fInotVar").checked;
   const inotAjanlar = [];
   document.getElementById("inotAjanList").querySelectorAll(".ajan-item").forEach(el => {
-    const ajan = el.querySelector('[data-field="ajan"]')?.value?.trim();
-    const doz  = el.querySelector('[data-field="doz"]')?.value?.trim();
-    if (ajan) inotAjanlar.push({ ajan, doz: doz || "" });
+    const secim = el.querySelector(".ajan-adi")?.value || "";
+    if (secim === "__diger__") {
+      const ad  = el.querySelector(".ajan-diger-ad")?.value?.trim();
+      const doz = el.querySelector(".ajan-diger-doz")?.value?.trim();
+      if (ad) inotAjanlar.push({ ajan: ad, doz: doz || "" });
+      return;
+    }
+    if (!ILAC_TABLOSU[secim]) return;
+    inotAjanlar.push({
+      ajan: secim,
+      doz: "",
+      carpan:      parseInt(el.querySelector(".ajan-carpan")?.value, 10) || 1,
+      hacim_cc:    sayi(el.querySelector(".ajan-hacim")?.value),
+      miktar:      sayi(el.querySelector(".ajan-miktar")?.value),
+      hiz_cc_saat: sayi(el.querySelector(".ajan-hiz")?.value),
+    });
   });
 
   // Sedasyon ajanlar
@@ -948,6 +1292,8 @@ async function hastaKaydet(e) {
     unite,
     yatak_no: String(yatakNo),
     ad_soyad: document.getElementById("fAdSoyad").value.trim(),
+    kilo: sayi(document.getElementById("fKilo").value),
+    boy:  sayi(document.getElementById("fBoy").value),
     tani: document.getElementById("fTani").value.trim(),
     kabul_epikrizi: document.getElementById("fKabulEpikrizi").value.trim(),
     klinik_durum: {
@@ -1026,13 +1372,49 @@ async function hastaDetayAc(id) {
       <div class="detay-alan full"><div class="detay-alan-label">Tanı</div>
         <div class="detay-alan-value ${!hasta.tani ? "bos" : ""}">${escHtml(hasta.tani) || "Girilmedi"}</div>
       </div>
+      <div class="detay-alan"><div class="detay-alan-label">Kilo / Boy</div>
+        <div class="detay-alan-value ${!hasta.kilo && !hasta.boy ? "bos" : ""}">${
+          hasta.kilo || hasta.boy
+            ? `${hasta.kilo ? dozYaz(hasta.kilo, 1) + " kg" : "—"} / ${hasta.boy ? dozYaz(hasta.boy, 0) + " cm" : "—"}`
+            : "Girilmedi"}</div>
+      </div>
+      <div class="detay-alan"><div class="detay-alan-label">VKİ</div>
+        <div class="detay-alan-value ${vkiHesapla(hasta.kilo, hasta.boy) === null ? "bos" : ""}">${
+          vkiHesapla(hasta.kilo, hasta.boy) !== null
+            ? `${dozYaz(vkiHesapla(hasta.kilo, hasta.boy), 1)} kg/m² <small style="font-weight:normal;opacity:.8">${vkiSinifi(vkiHesapla(hasta.kilo, hasta.boy))}</small>`
+            : "—"}</div>
+      </div>
+      <div class="detay-alan"><div class="detay-alan-label">Günlük Kalori İhtiyacı</div>
+        <div class="detay-alan-value ${!kaloriIhtiyaci(hasta.kilo) ? "bos" : ""}">${
+          kaloriIhtiyaci(hasta.kilo)
+            ? `${kaloriIhtiyaci(hasta.kilo).min}–${kaloriIhtiyaci(hasta.kilo).max} kcal/gün <small style="font-weight:normal;opacity:.8">${KCAL_MIN_PER_KG}–${KCAL_MAX_PER_KG} kcal/kg</small>`
+            : "—"}</div>
+      </div>
       <div class="detay-alan"><div class="detay-alan-label">Oluşturma</div><div class="detay-alan-value" style="font-size:.8rem">${formatTarih(hasta.olusturma_tarihi)}</div></div>
       <div class="detay-alan"><div class="detay-alan-label">Son Güncelleme</div><div class="detay-alan-value" style="font-size:.8rem">${formatTarih(hasta.guncelleme_tarihi)}</div></div>
     </div>`;
 
   // ── Klinik Durum ────────────────────────────────────────────────────────
-  const inotStr = (klDurum.inot_ajanlar || []).map(a => `${a.ajan}${a.doz ? " " + a.doz : ""}`).join(" / ") || (klDurum.inot_var ? "Kullanılıyor" : "");
-  const sedStr  = (klDurum.sed_ajanlar  || []).map(a => `${a.ajan}${a.doz ? " " + a.doz : ""}`).join(" / ") || (klDurum.sed_var  ? "Kullanılıyor" : "");
+  // İnotroplar: hazırlık, hız ve hesaplanan doz satır satır
+  const inotDetayHtml = (klDurum.inot_ajanlar || []).filter(a => a && a.ajan).map(a => {
+    const o = inotOzeti(a, hasta.kilo);
+    if (!o.tabloda) {
+      return `<div class="inot-detay-satir">${escHtml(o.ajan)}${o.metin ? ` — ${escHtml(o.metin)}` : ""}</div>`;
+    }
+    const hazirlik = `x${o.carpan} · ${dozYaz(o.miktar, 1)} ${o.miktar_birimi}/${dozYaz(o.hacim, 0)} cc`;
+    const hiz = o.hiz !== null ? ` · ${dozYaz(o.hiz, 1)} cc/h` : "";
+    const doz = o.doz !== null
+      ? `<span class="inot-doz ${o.durum}">${dozYaz(o.doz, 3)} ${o.doz_birimi}</span>`
+      : o.metin
+      ? `<span class="inot-doz">${escHtml(o.metin)}</span>`
+      : `<span class="inot-doz uyari">${!hasta.kilo ? "kilo girilmemiş" : "hız girilmemiş"}</span>`;
+    return `<div class="inot-detay-satir">
+        <strong>${escHtml(o.ajan)}</strong> ${doz}
+        <small>${hazirlik}${hiz} · aralık ${dozYaz(o.min_doz, 2)}–${dozYaz(o.max_doz, 2)} ${o.doz_birimi}</small>
+      </div>`;
+  }).join("");
+  const inotStr = inotDetayHtml || (klDurum.inot_var ? "Kullanılıyor" : "");
+  const sedStr  = (klDurum.sed_ajanlar  || []).map(a => `${escHtml(a.ajan)}${a.doz ? " " + escHtml(a.doz) : ""}`).join(" / ") || (klDurum.sed_var  ? "Kullanılıyor" : "");
 
   const klinikHtml = `
     <div class="detay-section" style="margin-top:16px;">
@@ -1051,13 +1433,13 @@ async function hastaDetayAc(id) {
         <div class="kd-panel ${klDurum.inot_var ? "aktif-inot" : ""}">
           <div class="kd-panel-label">💉 İnotrop / Vazopressör</div>
           ${klDurum.inot_var
-            ? `<div class="kd-panel-value inot-v">${escHtml(inotStr) || "Kullanılıyor"}</div>`
+            ? `<div class="kd-panel-value inot-v">${inotStr || "Kullanılıyor"}</div>`
             : `<div class="kd-panel-value bos">—</div>`}
         </div>
         <div class="kd-panel ${klDurum.sed_var ? "aktif-sed" : ""}">
           <div class="kd-panel-label">💊 Sedasyon</div>
           ${klDurum.sed_var
-            ? `<div class="kd-panel-value sed-v">${escHtml(sedStr) || "Kullanılıyor"}</div>`
+            ? `<div class="kd-panel-value sed-v">${sedStr || "Kullanılıyor"}</div>`
             : `<div class="kd-panel-value bos">—</div>`}
         </div>
         <div class="kd-panel">

@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import List
 from jinja2 import Environment, BaseLoader
 
+from ilaclar import ajan_ozeti, vki_hesapla, vki_sinifi, kalori_ihtiyaci
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HTML ŞABLONu — A4, kompakt, klinik
@@ -77,6 +79,9 @@ VIZIT_TEMPLATE = """
   }
   .kd-value { font-size: 8.5pt; color: #111827; white-space: pre-wrap; }
   .kd-value.bos { color: #9ca3af; font-style: italic; }
+  .kd-alt { font-size: 7pt; color: #6b7280; font-weight: normal; }
+  .doz-aralikta { color: #047857; font-weight: 700; }
+  .doz-dusuk, .doz-yuksek { color: #b91c1c; font-weight: 700; }
   .kd-value.vent-renk { color: #dc2626; font-weight: 600; }
   .kd-value.inot-renk { color: #ea580c; font-weight: 600; }
   .kd-value.sed-renk  { color: #7c3aed; font-weight: 600; }
@@ -154,6 +159,9 @@ VIZIT_TEMPLATE = """
     <div style="flex:1;">
       <div class="h-ad">{{ hasta.ad_soyad }}</div>
       {% if hasta.tani %}<div class="h-tani">{{ hasta.tani }}</div>{% endif %}
+      {% if hasta.kilo or hasta.boy %}
+        <div class="h-tani">{% if hasta.kilo %}{{ hasta.kilo | sayi }} kg{% endif %}{% if hasta.boy %} · {{ hasta.boy | sayi(0) }} cm{% endif %}{% if hasta.vki %} · VKİ {{ hasta.vki | sayi(1) }} ({{ hasta.vki_sinifi }}){% endif %}</div>
+      {% endif %}
     </div>
     <div class="badges">
       {% if kd.vent_var %}<span class="badge vent">VENT</span>{% endif %}
@@ -182,9 +190,20 @@ VIZIT_TEMPLATE = """
       </div>
       <div class="kd-alan">
         <div class="kd-label">İnotrop / Vazopressör</div>
-        {% if kd.inot_var and kd.inot_ajanlar %}
-          {% for a in kd.inot_ajanlar %}
-            <div class="kd-value inot-renk">{{ a.ajan }}{% if a.doz %} {{ a.doz }}{% endif %}</div>
+        {% if kd.inot_var and kd.inot_ozetleri %}
+          {% for o in kd.inot_ozetleri %}
+            {% if o.tabloda %}
+              <div class="kd-value inot-renk">{{ o.ajan }}{% if o.carpan > 1 %} x{{ o.carpan }}{% endif %}{% if o.hiz_cc_saat is not none %} — {{ o.hiz_cc_saat | sayi }} cc/h{% endif %}
+                {% if o.doz is not none %}
+                  <span class="doz-{{ o.durum }}">{{ o.doz | sayi(3) }} {{ o.doz_birimi }}</span>
+                {% elif o.metin %}
+                  {{ o.metin }}
+                {% endif %}
+                <br><span class="kd-alt">{{ o.miktar | sayi }} {{ o.miktar_birimi }}/{{ o.hacim_cc | sayi }} cc · aralık {{ o.min_doz | sayi }}-{{ o.max_doz | sayi }} {{ o.doz_birimi }}</span>
+              </div>
+            {% else %}
+              <div class="kd-value inot-renk">{{ o.ajan }}{% if o.metin %} {{ o.metin }}{% endif %}</div>
+            {% endif %}
           {% endfor %}
         {% elif kd.inot_var %}
           <div class="kd-value inot-renk">Kullanılıyor</div>
@@ -209,6 +228,9 @@ VIZIT_TEMPLATE = """
         <div class="kd-value {% if not kd.beslenme or kd.beslenme == 'Yok' %}bos{% endif %}">
           {{ kd.beslenme or '—' }}
         </div>
+        {% if hasta.kalori %}
+          <div class="kd-alt">{{ hasta.kalori.min }}–{{ hasta.kalori.max }} kcal/gün</div>
+        {% endif %}
       </div>
       <div class="kd-alan">
         <div class="kd-label">Diürez</div>
@@ -484,6 +506,10 @@ def _hazirla_hasta(h: dict) -> dict:
     kd.setdefault("crrt_baslangic", "")
     kd.setdefault("crrt_tipi", "")
     
+    # İnotrop ajanlarını hazırlık + hız + hesaplanan doz olarak zenginleştir
+    kilo = h.get("kilo")
+    kd["inot_ozetleri"] = [ajan_ozeti(a, kilo) for a in kd.get("inot_ajanlar", []) if a and a.get("ajan")]
+
     if kd.get("crrt_var") and kd.get("crrt_baslangic"):
         try:
             crrt_tarih = datetime.strptime(kd["crrt_baslangic"], "%Y-%m-%d").date()
@@ -493,8 +519,12 @@ def _hazirla_hasta(h: dict) -> dict:
         except Exception:
             pass
 
+    vki = vki_hesapla(kilo, h.get("boy"))
     return {
         **h,
+        "vki": vki,
+        "vki_sinifi": vki_sinifi(vki),
+        "kalori": kalori_ihtiyaci(kilo),
         "klinik_durum": kd,
         "planlanan_islemler": islemler,
         "goruntuleme_tetkik": tetkikler,
@@ -507,9 +537,23 @@ def _hazirla_hasta(h: dict) -> dict:
     }
 
 
+def _sayi_yaz(deger, basamak: int = 2) -> str:
+    """Sayıyı gereksiz sıfırlar olmadan, virgüllü Türkçe biçimde yazar."""
+    if deger is None or deger == "":
+        return ""
+    try:
+        s = f"{float(deger):.{basamak}f}"
+    except (TypeError, ValueError):
+        return str(deger)
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return (s or "0").replace(".", ",")
+
+
 def _html_olustur(hastalar: list, unite_filtre: str = "") -> str:
     hazir = [_hazirla_hasta(dict(h)) for h in hastalar]
     env = Environment(loader=BaseLoader())
+    env.filters["sayi"] = _sayi_yaz
     tmpl = env.from_string(VIZIT_TEMPLATE)
     return tmpl.render(
         hastalar=hazir,
