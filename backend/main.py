@@ -74,6 +74,53 @@ def cerez_secure_mi(request: Request) -> bool:
 
 security = HTTPBearer(auto_error=False)
 
+# ── Giriş denemesi sınırlama ──────────────────────────────────────────────────
+# Tek hesap ve tek şifre olduğu için, internete açık bir adreste sınırsız deneme
+# gerçek bir risk. Sayaç yalnızca bellekte tutulur: sunucu yeniden başlayınca
+# sıfırlanır (kendinizi kilitlerseniz kurtuluş yolu budur).
+GIRIS_MAX_DENEME = int(os.getenv("GIRIS_MAX_DENEME", "5"))
+GIRIS_KILIT_DAKIKA = int(os.getenv("GIRIS_KILIT_DAKIKA", "15"))
+
+# ip -> {"sayi": int, "ilk": datetime, "kilit_bitis": datetime | None}
+_giris_denemeleri: dict = {}
+
+def _istemci_ip(request: Request) -> str:
+    # uvicorn proxy başlıklarını çözdüğü için ters vekil arkasında da gerçek IP gelir
+    return request.client.host if request.client else "bilinmiyor"
+
+def giris_kilidi_kontrol(request: Request) -> None:
+    """Kilitliyse isteği reddeder. Doğru şifreyle bile açılmaz — aksi halde
+    kilit kaba kuvvet denemesini yavaşlatmazdı."""
+    kayit = _giris_denemeleri.get(_istemci_ip(request))
+    if not kayit or not kayit.get("kilit_bitis"):
+        return
+    simdi = datetime.now(timezone.utc)
+    if simdi >= kayit["kilit_bitis"]:
+        _giris_denemeleri.pop(_istemci_ip(request), None)   # kilit doldu, sıfırla
+        return
+    kalan = int((kayit["kilit_bitis"] - simdi).total_seconds() // 60) + 1
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=f"Çok fazla hatalı giriş denemesi. {kalan} dakika sonra tekrar deneyin.",
+    )
+
+def giris_basarisiz_kaydet(request: Request) -> None:
+    ip = _istemci_ip(request)
+    simdi = datetime.now(timezone.utc)
+    kayit = _giris_denemeleri.get(ip)
+    # Pencere dolduysa sayacı sıfırdan başlat
+    if not kayit or (simdi - kayit["ilk"]) > timedelta(minutes=GIRIS_KILIT_DAKIKA):
+        kayit = {"sayi": 0, "ilk": simdi, "kilit_bitis": None}
+    kayit["sayi"] += 1
+    if kayit["sayi"] >= GIRIS_MAX_DENEME:
+        kayit["kilit_bitis"] = simdi + timedelta(minutes=GIRIS_KILIT_DAKIKA)
+        print(f"[GÜVENLİK] {ip} adresinden {kayit['sayi']} hatalı giriş; "
+              f"{GIRIS_KILIT_DAKIKA} dakika kilitlendi.")
+    _giris_denemeleri[ip] = kayit
+
+def giris_basarili_temizle(request: Request) -> None:
+    _giris_denemeleri.pop(_istemci_ip(request), None)
+
 # ── Kimlik Doğrulama Yardımcıları ─────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
@@ -185,11 +232,14 @@ def root():
 
 @app.post("/api/auth/login", response_model=LoginResponse, tags=["Auth"])
 def login(req: LoginRequest, request: Request, response: Response):
+    giris_kilidi_kontrol(request)
     if req.kullanici_adi != AUTH_USERNAME or not verify_password(req.sifre, AUTH_PASSWORD_HASH):
+        giris_basarisiz_kaydet(request)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Kullanıcı adı veya şifre hatalı.",
         )
+    giris_basarili_temizle(request)
     token = create_access_token({"sub": AUTH_USERNAME})
     response.set_cookie(
         key="vizit_token",
