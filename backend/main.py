@@ -313,6 +313,30 @@ def _fetch_hasta(conn, hasta_id: int) -> Hasta:
 
 CIKIS_TURLERI = ("taburcu", "servis", "exitus", "sevk", "devir")
 
+# ── Denetim izi ───────────────────────────────────────────────────────────────
+
+def _hasta_ozet(row_veya_dict) -> str:
+    """Kayıt içine gömülecek hasta tanımı — hasta silinse de kim olduğu kalsın."""
+    if row_veya_dict is None:
+        return ""
+    d = dict(row_veya_dict)
+    return f"{d.get('unite', '')} / yatak {d.get('yatak_no', '')} / {d.get('ad_soyad', '')}".strip()
+
+def islem_kaydet(conn, kullanici: str, islem: str, hasta_id=None,
+                 hasta_ozet: str = "", detay: str = "") -> None:
+    """
+    Değişiklikleri denetim izine yazar. Çağıran fonksiyon commit eder.
+    Kayıt yazılamazsa asıl işlem engellenmesin diye hata yutulur ama loglanır.
+    """
+    try:
+        conn.execute(
+            "INSERT INTO islem_kayitlari (kullanici, islem, hasta_id, hasta_ozet, detay)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (kullanici, islem, hasta_id, hasta_ozet, detay),
+        )
+    except Exception as e:
+        print(f"[UYARI] İşlem kaydı yazılamadı ({islem}): {e}")
+
 def _yatak_dogrula(unite: str, yatak_no: str) -> str:
     """Ünite kodunu ve yatak numarasını kapasiteye göre doğrular."""
     if unite not in UNITE_KONFIG:
@@ -386,8 +410,8 @@ def hasta_listesi(
     finally:
         conn.close()
 
-@app.post("/api/hastalar", response_model=Hasta, status_code=201, dependencies=[Depends(get_current_user)], tags=["Hastalar"])
-def hasta_ekle(hasta: HastaCreate):
+@app.post("/api/hastalar", response_model=Hasta, status_code=201, tags=["Hastalar"])
+def hasta_ekle(hasta: HastaCreate, user: str = Depends(get_current_user)):
     """Yeni hasta kaydı oluştur."""
     conn = get_connection()
     try:
@@ -414,6 +438,10 @@ def hasta_ekle(hasta: HastaCreate):
             """,
             (*params, "aktif"),
         )
+        islem_kaydet(
+            conn, user, "hasta_ekle", cur.lastrowid,
+            f"{hasta.unite} / yatak {hasta.yatak_no} / {hasta.ad_soyad}",
+        )
         conn.commit()
         return _fetch_hasta(conn, cur.lastrowid)
     finally:
@@ -427,13 +455,13 @@ def hasta_getir(hasta_id: int):
     finally:
         conn.close()
 
-@app.put("/api/hastalar/{hasta_id}", response_model=Hasta, dependencies=[Depends(get_current_user)], tags=["Hastalar"])
-def hasta_guncelle(hasta_id: int, hasta: HastaUpdate):
+@app.put("/api/hastalar/{hasta_id}", response_model=Hasta, tags=["Hastalar"])
+def hasta_guncelle(hasta_id: int, hasta: HastaUpdate, user: str = Depends(get_current_user)):
     """Hasta bilgilerini güncelle."""
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT id, unite, yatak_no, durum, cikis_turu, cikis_detayi FROM hastalar WHERE id = ?",
+            "SELECT id, unite, yatak_no, ad_soyad, durum, cikis_turu, cikis_detayi FROM hastalar WHERE id = ?",
             (hasta_id,),
         ).fetchone()
         if not row:
@@ -473,37 +501,45 @@ def hasta_guncelle(hasta_id: int, hasta: HastaUpdate):
             """,
             (*params, durum, hasta_id),
         )
+        # Yatak/ünite değiştiyse kayda yaz — sonradan takip etmesi kolay olsun
+        detay = ""
+        if row["unite"] != hasta.unite or row["yatak_no"] != hasta.yatak_no:
+            detay = (f"{row['unite']}/{row['yatak_no']} → {hasta.unite}/{hasta.yatak_no}")
+        islem_kaydet(conn, user, "hasta_guncelle", hasta_id,
+                     f"{hasta.unite} / yatak {hasta.yatak_no} / {hasta.ad_soyad}", detay)
         conn.commit()
         return _fetch_hasta(conn, hasta_id)
     finally:
         conn.close()
 
-@app.patch("/api/hastalar/{hasta_id}/durum", dependencies=[Depends(get_current_user)], tags=["Hastalar"])
-def hasta_durum_degistir(hasta_id: int, durum: str = Query(...)):
+@app.patch("/api/hastalar/{hasta_id}/durum", tags=["Hastalar"])
+def hasta_durum_degistir(hasta_id: int, durum: str = Query(...), user: str = Depends(get_current_user)):
     if durum not in ("aktif", "taburcu"):
         raise HTTPException(status_code=400, detail="Geçersiz durum.")
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
+        row = conn.execute("SELECT * FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
-        
+
         if durum == "aktif":
             conn.execute("UPDATE hastalar SET durum = ?, cikis_turu = NULL, cikis_detayi = NULL WHERE id = ?", (durum, hasta_id))
         else:
             conn.execute("UPDATE hastalar SET durum = ? WHERE id = ?", (durum, hasta_id))
-            
+
+        islem_kaydet(conn, user, "durum_degistir", hasta_id, _hasta_ozet(row),
+                     f"{row['durum']} → {durum}")
         conn.commit()
         return {"id": hasta_id, "durum": durum}
     finally:
         conn.close()
 
-@app.post("/api/hastalar/{hasta_id}/cikis", dependencies=[Depends(get_current_user)], tags=["Hastalar"])
-def hasta_cikis_islemi(hasta_id: int, req: CikisRequest):
+@app.post("/api/hastalar/{hasta_id}/cikis", tags=["Hastalar"])
+def hasta_cikis_islemi(hasta_id: int, req: CikisRequest, user: str = Depends(get_current_user)):
     """Hasta çıkış/devir işlemlerini yapar."""
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id, unite, yatak_no FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
+        row = conn.execute("SELECT * FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
 
@@ -540,7 +576,9 @@ def hasta_cikis_islemi(hasta_id: int, req: CikisRequest):
                 "INSERT INTO epikriz_notlari (hasta_id, not_metni) VALUES (?, ?)",
                 (hasta_id, not_metni),
             )
-            
+            islem_kaydet(conn, user, "devir", hasta_id, _hasta_ozet(row),
+                         f"{eski_unite}/{eski_yatak} → {req.yeni_unite}/{req.yeni_yatak_no}")
+
         else:
             conn.execute(
                 "UPDATE hastalar SET durum = 'taburcu', cikis_turu = ?, cikis_detayi = ? WHERE id = ?",
@@ -554,36 +592,45 @@ def hasta_cikis_islemi(hasta_id: int, req: CikisRequest):
                 "INSERT INTO epikriz_notlari (hasta_id, not_metni) VALUES (?, ?)",
                 (hasta_id, not_metni),
             )
+            islem_kaydet(conn, user, f"cikis_{req.islem_turu}", hasta_id,
+                         _hasta_ozet(row), req.detay or "")
 
         conn.commit()
         return {"id": hasta_id, "islem": req.islem_turu, "mesaj": "Başarılı"}
     finally:
         conn.close()
 
-@app.patch("/api/hastalar/{hasta_id}/kabul_epikrizi", response_model=Hasta, dependencies=[Depends(get_current_user)], tags=["Hastalar"])
-def kabul_epikrizi_guncelle(hasta_id: int, epikriz: EpikrizNotCreate):
+@app.patch("/api/hastalar/{hasta_id}/kabul_epikrizi", response_model=Hasta, tags=["Hastalar"])
+def kabul_epikrizi_guncelle(hasta_id: int, epikriz: EpikrizNotCreate, user: str = Depends(get_current_user)):
     """Kabul epikrizini güncelle."""
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
+        row = conn.execute("SELECT * FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
         conn.execute(
             "UPDATE hastalar SET kabul_epikrizi = ? WHERE id = ?",
             (epikriz.not_metni, hasta_id),
         )
+        islem_kaydet(conn, user, "kabul_epikrizi_guncelle", hasta_id, _hasta_ozet(row))
         conn.commit()
         return _fetch_hasta(conn, hasta_id)
     finally:
         conn.close()
 
-@app.delete("/api/hastalar/{hasta_id}", status_code=204, dependencies=[Depends(get_current_user)], tags=["Hastalar"])
-def hasta_sil(hasta_id: int):
+@app.delete("/api/hastalar/{hasta_id}", status_code=204, tags=["Hastalar"])
+def hasta_sil(hasta_id: int, user: str = Depends(get_current_user)):
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
+        row = conn.execute("SELECT * FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
+        # Hasta gidiyor; kim olduğu yalnızca bu kayıtta kalacak
+        not_sayisi = conn.execute(
+            "SELECT COUNT(*) FROM epikriz_notlari WHERE hasta_id = ?", (hasta_id,)
+        ).fetchone()[0]
+        islem_kaydet(conn, user, "hasta_sil", hasta_id, _hasta_ozet(row),
+                     f"tanı: {row['tani'] or '—'}; {not_sayisi} seyir notu birlikte silindi")
         conn.execute("DELETE FROM hastalar WHERE id = ?", (hasta_id,))
         conn.commit()
     finally:
@@ -593,17 +640,19 @@ def hasta_sil(hasta_id: int):
 # ── EPİKRİZ (Klinik Seyir Notları) ───────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@app.post("/api/hastalar/{hasta_id}/epikriz", response_model=EpikrizNot, status_code=201, dependencies=[Depends(get_current_user)], tags=["Epikriz"])
-def epikriz_not_ekle(hasta_id: int, not_: EpikrizNotCreate):
+@app.post("/api/hastalar/{hasta_id}/epikriz", response_model=EpikrizNot, status_code=201, tags=["Epikriz"])
+def epikriz_not_ekle(hasta_id: int, not_: EpikrizNotCreate, user: str = Depends(get_current_user)):
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
+        row = conn.execute("SELECT * FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
         cur = conn.execute(
             "INSERT INTO epikriz_notlari (hasta_id, not_metni) VALUES (?, ?)",
             (hasta_id, not_.not_metni),
         )
+        islem_kaydet(conn, user, "epikriz_ekle", hasta_id, _hasta_ozet(row),
+                     f"not #{cur.lastrowid}")
         conn.commit()
         created = conn.execute("SELECT * FROM epikriz_notlari WHERE id = ?", (cur.lastrowid,)).fetchone()
         conn.execute(
@@ -627,14 +676,15 @@ def epikriz_listesi(hasta_id: int):
     finally:
         conn.close()
 
-@app.put("/api/epikriz/{epikriz_id}", response_model=EpikrizNot, dependencies=[Depends(get_current_user)], tags=["Epikriz"])
-def epikriz_not_duzenle(epikriz_id: int, not_: EpikrizNotCreate):
+@app.put("/api/epikriz/{epikriz_id}", response_model=EpikrizNot, tags=["Epikriz"])
+def epikriz_not_duzenle(epikriz_id: int, not_: EpikrizNotCreate, user: str = Depends(get_current_user)):
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id, hasta_id FROM epikriz_notlari WHERE id = ?", (epikriz_id,)).fetchone()
+        row = conn.execute("SELECT id, hasta_id, not_metni FROM epikriz_notlari WHERE id = ?", (epikriz_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Not bulunamadı")
-        
+
+        hasta = conn.execute("SELECT * FROM hastalar WHERE id = ?", (row["hasta_id"],)).fetchone()
         conn.execute(
             "UPDATE epikriz_notlari SET not_metni = ? WHERE id = ?",
             (not_.not_metni, epikriz_id)
@@ -643,20 +693,27 @@ def epikriz_not_duzenle(epikriz_id: int, not_: EpikrizNotCreate):
             "UPDATE hastalar SET guncelleme_tarihi = datetime('now','localtime') WHERE id = ?",
             (row["hasta_id"],)
         )
+        # Notun eski hali kayda giriyor — üzerine yazılan metin kaybolmasın
+        islem_kaydet(conn, user, "epikriz_duzenle", row["hasta_id"], _hasta_ozet(hasta),
+                     f"not #{epikriz_id}; eski metin: {row['not_metni']}")
         conn.commit()
         updated = conn.execute("SELECT * FROM epikriz_notlari WHERE id = ?", (epikriz_id,)).fetchone()
         return dict(updated)
     finally:
         conn.close()
 
-@app.delete("/api/epikriz/{epikriz_id}", status_code=204, dependencies=[Depends(get_current_user)], tags=["Epikriz"])
-def epikriz_not_sil(epikriz_id: int):
+@app.delete("/api/epikriz/{epikriz_id}", status_code=204, tags=["Epikriz"])
+def epikriz_not_sil(epikriz_id: int, user: str = Depends(get_current_user)):
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id, hasta_id FROM epikriz_notlari WHERE id = ?", (epikriz_id,)).fetchone()
+        row = conn.execute("SELECT id, hasta_id, not_metni FROM epikriz_notlari WHERE id = ?", (epikriz_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Not bulunamadı")
-        
+
+        hasta = conn.execute("SELECT * FROM hastalar WHERE id = ?", (row["hasta_id"],)).fetchone()
+        # Silinen notun metni kayda giriyor; başka yerde kalmıyor
+        islem_kaydet(conn, user, "epikriz_sil", row["hasta_id"], _hasta_ozet(hasta),
+                     f"not #{epikriz_id}; silinen metin: {row['not_metni']}")
         conn.execute("DELETE FROM epikriz_notlari WHERE id = ?", (epikriz_id,))
         conn.execute(
             "UPDATE hastalar SET guncelleme_tarihi = datetime('now','localtime') WHERE id = ?",
