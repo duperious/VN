@@ -14,7 +14,7 @@ from typing import List, Optional
 import bcrypt
 import jwt
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Depends, Cookie, status
+from fastapi import FastAPI, HTTPException, Query, Depends, Cookie, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -53,6 +53,24 @@ if not JWT_SECRET:
         "Kalıcı oturumlar için .env dosyasına JWT_SECRET ekleyin."
     )
 JWT_ALGORITHM = "HS256"
+
+# Oturum çerezinin "secure" bayrağı: açıkken tarayıcı çerezi yalnızca HTTPS
+# üzerinden gönderir. localhost HTTPS olmadığı için sabit açmak yerelde girişi
+# bozar; bu yüzden varsayılan davranış bağlantıya bakmak:
+#   - HTTPS istek  -> secure açık (Cloudflare Tunnel, Render vb. otomatik)
+#   - HTTP istek   -> secure kapalı (yerelde çalışmaya devam eder)
+# .env içindeki COOKIE_SECURE tanımlıysa bu otomatik karar ezilir.
+_cookie_secure_ham = os.getenv("COOKIE_SECURE", "").strip().lower()
+COOKIE_SECURE_AYAR = (
+    None if _cookie_secure_ham == ""
+    else _cookie_secure_ham in ("1", "true", "yes", "evet", "acik", "açık")
+)
+
+def cerez_secure_mi(request: Request) -> bool:
+    if COOKIE_SECURE_AYAR is not None:
+        return COOKIE_SECURE_AYAR
+    # uvicorn proxy başlıklarını okuduğu için ters vekil arkasında da doğru çalışır
+    return request.url.scheme == "https"
 
 security = HTTPBearer(auto_error=False)
 
@@ -166,7 +184,7 @@ def root():
 # ═════════════════════════════════════════════════════════════════════════════
 
 @app.post("/api/auth/login", response_model=LoginResponse, tags=["Auth"])
-def login(req: LoginRequest, response: Response):
+def login(req: LoginRequest, request: Request, response: Response):
     if req.kullanici_adi != AUTH_USERNAME or not verify_password(req.sifre, AUTH_PASSWORD_HASH):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -179,12 +197,20 @@ def login(req: LoginRequest, response: Response):
         httponly=True,
         max_age=7 * 24 * 3600,
         samesite="lax",
+        secure=cerez_secure_mi(request),
     )
     return LoginResponse(access_token=token, kullanici_adi=AUTH_USERNAME)
 
 @app.post("/api/auth/logout", tags=["Auth"])
-def logout(response: Response):
-    response.delete_cookie(key="vizit_token")
+def logout(request: Request, response: Response):
+    # Silme isteği çerezin yazıldığı bayraklarla eşleşmeli, aksi halde tarayıcı
+    # çerezi kaldırmayabilir.
+    response.delete_cookie(
+        key="vizit_token",
+        httponly=True,
+        samesite="lax",
+        secure=cerez_secure_mi(request),
+    )
     return {"message": "Başarıyla çıkış yapıldı."}
 
 @app.get("/api/auth/me", tags=["Auth"])
