@@ -7,3 +7,9 @@ backend/vizit.db
 node_modules/
 .venv/
 venv/
+
+# Hasta verisi içeren aktarım dosyaları asla depoya girmemeli.
+# Depo herkese açık; baş harf kullanılsa bile tanı, kültür ve öykü bilgisi
+# yayınlanmış olur.
+araclar/*.json
+!araclar/ornek_hastalar.json
