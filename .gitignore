@@ -13,3 +13,6 @@ venv/
 # yayınlanmış olur.
 araclar/*.json
 !araclar/ornek_hastalar.json
+
+# Sunucu ayarları — şifre hash'i ve JWT anahtarı içerir, depoya girmemeli
+dagitim/vizit.env

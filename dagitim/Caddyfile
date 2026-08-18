@@ -1,0 +1,16 @@
+# Caddy, Let's Encrypt sertifikasını kendisi alır ve yeniler.
+# ALAN_ADI .env dosyasından gelir (örn. vizit-abc.duckdns.org).
+
+{$ALAN_ADI} {
+	reverse_proxy app:8000
+
+	header {
+		# Tarayıcıya "bu siteye hep HTTPS ile gel" der
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "no-referrer"
+	}
+
+	encode gzip
+}

@@ -1,0 +1,44 @@
+# Oracle Cloud (veya herhangi bir Linux sunucu) için dağıtım.
+# Kullanım: dagitim/ klasöründe  docker compose up -d --build
+#
+# NOT: Ayar dosyasının adı bilerek ".env" değil. Docker Compose ".env" dosyasını
+# kendi değişken yerleştirmesi için de okur ve bcrypt hash'indeki $ işaretlerini
+# değişken sanıp bozar. "vizit.env" adıyla bu sorun oluşmuyor.
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: vizit.env
+    environment:
+      # Uygulama ters vekilin arkasında; uvicorn'un X-Forwarded-* başlıklarına
+      # güvenmesi gerekiyor. Aksi halde:
+      #  - istekler HTTPS görünmez, çerezin secure bayrağı açılmaz
+      #  - tüm kullanıcılar tek IP gibi görünür, giriş kilidi herkesi kilitler
+      # Uygulama dışarı açık değil, yalnızca caddy erişiyor; bu yüzden güvenli.
+      FORWARDED_ALLOW_IPS: "*"
+    volumes:
+      - vizit-veri:/data
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file: vizit.env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  vizit-veri:      # hasta veritabanı — konteyner silinse de kalır
+  caddy-data:      # HTTPS sertifikaları
+  caddy-config:
