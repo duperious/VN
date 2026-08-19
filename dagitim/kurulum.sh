@@ -91,5 +91,5 @@ echo
 echo "  HTTPS sertifikasının alınması 1-2 dakika sürebilir."
 echo "  Kayıtlar:   sudo docker compose logs -f"
 echo "  Durdurmak:  sudo docker compose down"
-echo "  Yedek:      sudo docker compose exec app cat /data/vizit.db > yedek.db"
+echo "  Yedek:      bash dagitim/yedek.sh"
 echo "════════════════════════════════════════════════════════"

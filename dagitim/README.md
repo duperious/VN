@@ -11,6 +11,7 @@ gerekmez.
 | **app** | Uygulamanın kendisi (Docker konteyneri) |
 | **caddy** | HTTPS sertifikasını otomatik alan ve yenileyen ters vekil |
 | **vizit-veri** | Hasta veritabanının durduğu kalıcı disk alanı |
+| **yedek.sh** | Tutarlı yedek alır ve doğrular |
 
 Veritabanı Docker biriminde tutulur; konteyner silinip yeniden kurulsa da veri kalır.
 
@@ -81,14 +82,16 @@ sudo docker compose up -d --build    # güncelledikten sonra yeniden kur
 **Yedek almak** (düzenli yapın, veri sadece bu sunucuda):
 
 ```bash
-sudo docker compose exec -T app cat /data/vizit.db > ~/yedek_$(date +%F).db
+bash dagitim/yedek.sh
 ```
 
-Sonra kendi bilgisayarınıza indirin:
+Tarihli bir yedek dosyası üretir, bütünlüğünü doğrular ve içindeki hasta
+sayısını yazar. Bitince kendi bilgisayarınıza indirmek için gereken `scp`
+komutunu da ekrana yazar.
 
-```bash
-scp -i anahtar.key ubuntu@SUNUCU_IP:~/yedek_*.db .
-```
+> Veritabanını `cp` veya `cat` ile kopyalamayın. Uygulama WAL modunda çalışıyor;
+> son kayıtlar ayrı bir dosyada beklediği için düz kopya **eksik, hatta tamamen
+> boş** bir yedek üretir. `yedek.sh` SQLite'ın kendi backup işlevini kullanır.
 
 **Güncelleme:**
 
