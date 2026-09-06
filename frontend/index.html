@@ -268,6 +268,44 @@
               </svg>
               İnotrop ajan ekle
             </button>
+
+            <!-- Dirençli şokta inotropun yanında giden ek tedaviler.
+                 inotAjanlarDiv içinde oldukları için inotrop işaretlenmeden görünmezler. -->
+            <div class="form-row" style="margin-top:12px;">
+              <div class="form-group">
+                <label class="form-label">Bikarbonat İnfüzyonu</label>
+                <label class="toggle-group" id="bikarbonatToggleGroup" style="margin-top:4px;">
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="fBikarbonatVar" onchange="vaskulerToggle('bikarbonat')" />
+                    <div class="toggle-track"></div>
+                    <div class="toggle-thumb"></div>
+                  </div>
+                  <span class="toggle-label" id="bikarbonatLabel">Almıyor</span>
+                </label>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Metilen Mavisi</label>
+                <label class="toggle-group" id="metilenToggleGroup" style="margin-top:4px;">
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="fMetilenVar" onchange="vaskulerToggle('metilen')" />
+                    <div class="toggle-track"></div>
+                    <div class="toggle-thumb"></div>
+                  </div>
+                  <span class="toggle-label" id="metilenLabel">Almıyor</span>
+                </label>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Hidrokortizon</label>
+                <label class="toggle-group" id="hidrokortizonToggleGroup" style="margin-top:4px;">
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="fHidrokortizonVar" onchange="vaskulerToggle('hidrokortizon')" />
+                    <div class="toggle-track"></div>
+                    <div class="toggle-thumb"></div>
+                  </div>
+                  <span class="toggle-label" id="hidrokortizonLabel">Almıyor</span>
+                </label>
+              </div>
+            </div>
           </div>
 
           <!-- Sedasyon -->
@@ -308,8 +346,12 @@
             </div>
             <div class="form-group">
               <label class="form-label" for="fDiurez">Diürez</label>
-              <input class="form-input" type="text" id="fDiurez"
-                     placeholder="örn. 800 ml/gün" />
+              <select class="form-select" id="fDiurez">
+                <option value="">—</option>
+                <option>Var</option>
+                <option>Yok</option>
+                <option>Kısıtlı</option>
+              </select>
             </div>
             <div class="form-group">
               <label class="form-label" for="fIrPupil">IR / Pupil</label>
@@ -453,20 +495,6 @@
             </div>
           </div>
 
-          <!-- Bikarbonat infüzyonu (derin asidoz) -->
-          <div class="form-row" style="margin-top:10px;">
-            <div class="form-group">
-              <label class="form-label">Bikarbonat İnfüzyonu Alıyor mu?</label>
-              <label class="toggle-group" id="bikarbonatToggleGroup" style="margin-top:4px;">
-                <div class="toggle-switch">
-                  <input type="checkbox" id="fBikarbonatVar" onchange="vaskulerToggle('bikarbonat')" />
-                  <div class="toggle-track"></div>
-                  <div class="toggle-thumb"></div>
-                </div>
-                <span class="toggle-label" id="bikarbonatLabel">Almıyor</span>
-              </label>
-            </div>
-          </div>
         </div>
 
         <!-- KABUL EPİKRİZİ -->

@@ -102,8 +102,10 @@ class KlinikDurum(BaseModel):
     crrt_baslangic: str = ""     # ISO date
     crrt_tipi: str = ""          # "Heparinli" | "Heparinsiz" | "Sitrat"
 
-    # Derin asidozda verilen bikarbonat infüzyonu
-    bikarbonat_var: bool = False
+    # Dirençli şokta inotropun yanında giden ek tedaviler
+    bikarbonat_var: bool = False        # derin asidozda
+    metilen_mavisi_var: bool = False    # vazoplejik şokta
+    hidrokortizon_var: bool = False
 
 
 # ── Ana modeller ──────────────────────────────────────────────────────────────

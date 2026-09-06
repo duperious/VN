@@ -240,7 +240,7 @@ VIZIT_TEMPLATE = """
     </div>
 
     <!-- Vasküler Erişim & Renal Takip -->
-    {% if kd.cvp_var or kd.diyaliz_kateter_var or kd.diyaliz_var or kd.crrt_var or kd.bikarbonat_var %}
+    {% if kd.cvp_var or kd.diyaliz_kateter_var or kd.diyaliz_var or kd.crrt_var or kd.bikarbonat_var or kd.metilen_mavisi_var or kd.hidrokortizon_var %}
     <div class="ek-bolum" style="margin-top:4px;">
       <div class="ek-baslik">Vasküler Erişim &amp; Renal Takip</div>
       <div class="klinik-grid" style="grid-template-columns:1fr 1fr 1fr 1fr; margin-bottom:0; padding-bottom:0; border-bottom:none;">
@@ -279,9 +279,13 @@ VIZIT_TEMPLATE = """
           {% endif %}
         </div>
         <div class="kd-alan">
-          <div class="kd-label">Bikarbonat İnf.</div>
-          {% if kd.bikarbonat_var %}
-            <div class="kd-value inot-renk">Alıyor</div>
+          <div class="kd-label">Şok Ek Tedavileri</div>
+          {% set ek = [] %}
+          {% if kd.bikarbonat_var %}{% set _ = ek.append('Bikarbonat inf.') %}{% endif %}
+          {% if kd.metilen_mavisi_var %}{% set _ = ek.append('Metilen mavisi') %}{% endif %}
+          {% if kd.hidrokortizon_var %}{% set _ = ek.append('Hidrokortizon') %}{% endif %}
+          {% if ek %}
+            <div class="kd-value inot-renk ilac-satir">{{ ek | join(', ') }}</div>
           {% else %}
             <div class="kd-value bos">—</div>
           {% endif %}
@@ -496,6 +500,8 @@ def _hazirla_hasta(h: dict) -> dict:
     kd.setdefault("crrt_baslangic", "")
     kd.setdefault("crrt_tipi", "")
     kd.setdefault("bikarbonat_var", False)
+    kd.setdefault("metilen_mavisi_var", False)
+    kd.setdefault("hidrokortizon_var", False)
     kd.setdefault("beslenme_yollari", [])
     
     # İnotrop ajanlarını hazırlık + hız + hesaplanan doz olarak zenginleştir

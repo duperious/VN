@@ -706,9 +706,14 @@ function renderKart(h) {
     sedHtml = `<div class="sed-satiri">💊 ${chipler}</div>`;
   }
 
-  // Bikarbonat infüzyonu (derin asidoz)
-  const bikarbonatHtml = klDurum.bikarbonat_var
-    ? `<div class="yaklasan-badge" style="background:rgba(56,189,248,.12);border-color:#38bdf8;color:#38bdf8">🧪 Bikarbonat infüzyonu alıyor</div>`
+  // Dirençli şok ek tedavileri (inotropun yanında giden)
+  const ekTedaviler = [
+    klDurum.bikarbonat_var && "Bikarbonat inf.",
+    klDurum.metilen_mavisi_var && "Metilen mavisi",
+    klDurum.hidrokortizon_var && "Hidrokortizon",
+  ].filter(Boolean);
+  const bikarbonatHtml = ekTedaviler.length
+    ? `<div class="yaklasan-badge" style="background:rgba(56,189,248,.12);border-color:#38bdf8;color:#38bdf8">🧪 ${escHtml(ekTedaviler.join(" · "))}</div>`
     : "";
 
   return `
@@ -857,7 +862,7 @@ function formTemizle() {
   document.querySelectorAll('#fNonEntubeDestekGroup input[type="checkbox"]').forEach(cb => cb.checked = false);
 
   // Vasküler erişim sıfırla
-  ["cvp","diyalizKat","diyaliz","crrt","bikarbonat"].forEach(t => {
+  ["cvp","diyalizKat","diyaliz","crrt","bikarbonat","metilen","hidrokortizon"].forEach(t => {
     const cbId = t === "cvp" ? "fCvpVar" : t === "diyalizKat" ? "fDiyalizKatVar" : t === "diyaliz" ? "fDiyalizVar" : "fCrrtVar";
     const el = document.getElementById(cbId);
     if (el) el.checked = false;
@@ -943,7 +948,19 @@ function formDoldur(h) {
   document.querySelectorAll('#fBeslenmeYollariGroup input[type="checkbox"]').forEach(cb => {
     cb.checked = yollar.includes(cb.value);
   });
-  document.getElementById("fDiurez").value   = klDurum.diurez || "";
+  // Diürez artık Var/Yok/Kısıtlı listesi. Eski kayıtlarda "Aktif", "Mevcut",
+  // "+" gibi serbest değerler var; listede karşılığı olmayan bir değer gelirse
+  // seçenek olarak ekleniyor. Aksi halde select boş kalır ve kaydedince
+  // hastanın mevcut diürez bilgisi sessizce silinirdi.
+  const diurezSel = document.getElementById("fDiurez");
+  const diurezDeger = klDurum.diurez || "";
+  if (diurezDeger && ![...diurezSel.options].some(o => o.value === diurezDeger)) {
+    const o = document.createElement("option");
+    o.value = diurezDeger;
+    o.textContent = diurezDeger + " (eski kayıt)";
+    diurezSel.appendChild(o);
+  }
+  diurezSel.value = diurezDeger;
   document.getElementById("fIrPupil").value  = klDurum.ir_pupil || "";
 
   // Vasküler Erişim & Renal Takip
@@ -971,6 +988,10 @@ function formDoldur(h) {
 
   document.getElementById("fBikarbonatVar").checked = !!klDurum.bikarbonat_var;
   vaskulerToggle("bikarbonat");
+  document.getElementById("fMetilenVar").checked = !!klDurum.metilen_mavisi_var;
+  vaskulerToggle("metilen");
+  document.getElementById("fHidrokortizonVar").checked = !!klDurum.hidrokortizon_var;
+  vaskulerToggle("hidrokortizon");
 
   // Planlanan işlemler
   (h.planlanan_islemler || []).forEach(i => islemEkle(i));
@@ -1017,6 +1038,8 @@ function vaskulerToggle(tip) {
     diyaliz:   { cb:"fDiyalizVar",   lbl:"diyalizLabel",   grp:"diyalizToggleGroup",   on:"Alıyor",  off:"Almıyor",  div:"diyalizGunleriDiv" },
     crrt:      { cb:"fCrrtVar",      lbl:"crrtLabel",      grp:"crrtToggleGroup",      on:"Alıyor",  off:"Almıyor",  div:"crrtDetayDiv" },
     bikarbonat:{ cb:"fBikarbonatVar",lbl:"bikarbonatLabel",grp:"bikarbonatToggleGroup",on:"Alıyor",  off:"Almıyor" },
+    metilen:   { cb:"fMetilenVar",   lbl:"metilenLabel",   grp:"metilenToggleGroup",   on:"Alıyor",  off:"Almıyor" },
+    hidrokortizon:{ cb:"fHidrokortizonVar", lbl:"hidrokortizonLabel", grp:"hidrokortizonToggleGroup", on:"Alıyor", off:"Almıyor" },
   };
   const m = map[tip]; if (!m) return;
   const cb  = document.getElementById(m.cb);
@@ -1512,7 +1535,11 @@ async function hastaKaydet(e) {
       crrt_var: document.getElementById("fCrrtVar").checked,
       crrt_baslangic: document.getElementById("fCrrtBaslangic")?.value || "",
       crrt_tipi: document.getElementById("fCrrtTipi")?.value || "",
-      bikarbonat_var: document.getElementById("fBikarbonatVar").checked,
+      // İnotrop alınmıyorsa bu ek tedaviler de alınmıyor demektir; gizli kalan
+      // eski işaretler kayda geçmesin.
+      bikarbonat_var:     inotVar && document.getElementById("fBikarbonatVar").checked,
+      metilen_mavisi_var: inotVar && document.getElementById("fMetilenVar").checked,
+      hidrokortizon_var:  inotVar && document.getElementById("fHidrokortizonVar").checked,
     },
     planlanan_islemler: planlananIslemler,
     goruntuleme_tetkik: goruntulemeTetkik,
@@ -1588,6 +1615,13 @@ async function hastaDetayAc(id) {
     </div>`;
 
   // ── Klinik Durum ────────────────────────────────────────────────────────
+  // Dirençli şok ek tedavileri (kart fonksiyonundakinin detay ekranı karşılığı)
+  const ekTedaviler = [
+    klDurum.bikarbonat_var && "Bikarbonat inf.",
+    klDurum.metilen_mavisi_var && "Metilen mavisi",
+    klDurum.hidrokortizon_var && "Hidrokortizon",
+  ].filter(Boolean);
+
   // İnotroplar: hazırlık, hız ve hesaplanan doz satır satır
   const inotDetayHtml = (klDurum.inot_ajanlar || []).filter(a => a && a.ajan).map(a => {
     const o = inotOzeti(a, hasta.kilo);
@@ -1686,10 +1720,10 @@ async function hastaDetayAc(id) {
                ${klDurum.crrt_baslangic ? '<br><small style="font-weight:normal;opacity:.9">Başlangıç: ' + escHtml(klDurum.crrt_baslangic) + (kacGundurKullaniliyor(klDurum.crrt_baslangic) ? ' — ' + kacGundurKullaniliyor(klDurum.crrt_baslangic) : '') + '</small>' : ''}</div>`
             : `<div class="kd-panel-value bos">—</div>`}
         </div>
-        <div class="kd-panel ${klDurum.bikarbonat_var ? 'aktif-inot' : ''}">
-          <div class="kd-panel-label">🧪 Bikarbonat İnfüzyonu</div>
-          ${klDurum.bikarbonat_var
-            ? `<div class="kd-panel-value inot-v">Alıyor</div>`
+        <div class="kd-panel ${ekTedaviler.length ? 'aktif-inot' : ''}">
+          <div class="kd-panel-label">🧪 Şok Ek Tedavileri</div>
+          ${ekTedaviler.length
+            ? `<div class="kd-panel-value inot-v">${escHtml(ekTedaviler.join(", "))}</div>`
             : `<div class="kd-panel-value bos">—</div>`}
         </div>
       </div>
