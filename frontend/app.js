@@ -131,18 +131,34 @@ function uremeYokMu(sonuc) {
 }
 
 /**
- * Her kültür türü için en güncel kaydı döndürür.
- * Aynı türden birden fazla kültür varsa tarihi en yeni olan alınır;
- * tarih girilmemişse listedeki son kayıt kazanır.
+ * Her kültür türü için ekranda gösterilecek kayıtları seçer.
+ * Tür başına en fazla iki kayıt döner:
+ *   bekleyen — o türün en yeni kaydı hâlâ sonuçsuzsa
+ *   sonuclu  — sonucu gelmiş EN YENİ kayıt (daha eskiler gösterilmez)
+ * Böylece "Kan: Bekleniyor" ile "03.09 Kan: E.coli" aynı anda görünebilir:
+ * bugün gönderilen kültür beklenirken önceki sonuç gözden kaybolmaz.
  */
+function bekliyorMu(k) {
+  return !k || !k.sonuc || k.sonuc === "Bekleniyor";
+}
+
 function sonKulturler(liste) {
   const gruplar = new Map();
   (liste || []).forEach(k => {
     if (!k || !k.tur) return;
-    const onceki = gruplar.get(k.tur);
-    if (!onceki || (k.tarih || "") >= (onceki.tarih || "")) gruplar.set(k.tur, k);
+    const g = gruplar.get(k.tur) || { tur: k.tur, enYeni: null, sonuclu: null };
+    // Tarihi olan en yeni kayıt; tarih yoksa listedeki son kayıt kazanır
+    if (!g.enYeni || (k.tarih || "") >= (g.enYeni.tarih || "")) g.enYeni = k;
+    if (!bekliyorMu(k) && (!g.sonuclu || (k.tarih || "") >= (g.sonuclu.tarih || ""))) g.sonuclu = k;
+    gruplar.set(k.tur, g);
   });
-  return [...gruplar.entries()];
+  return [...gruplar.values()].map(g => ({
+    tur: g.tur,
+    // Bekleyen yalnızca o türün EN YENİ kaydı sonuçsuzsa gösterilir; sonuç
+    // gelmişken duran eski bir "bekleniyor" kaydı yanıltıcı olurdu.
+    bekleyen: bekliyorMu(g.enYeni) ? g.enYeni : null,
+    sonuclu: g.sonuclu,
+  }));
 }
 
 /**
@@ -336,6 +352,20 @@ function formatTarih(s) {
   const d = new Date(s.replace(" ", "T"));
   if (isNaN(d)) return s;
   return d.toLocaleString("tr-TR", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit" });
+}
+
+/**
+ * Kültür çipleri için kısa tarih: "03.09". Tarih yoksa boş döner.
+ * ISO tarih (2026-09-03) doğrudan metinden okunuyor: new Date() bunu UTC gece
+ * yarısı sayar, UTC'nin gerisindeki saat dilimlerinde gün bir geri kayardı.
+ */
+function gunAy(s) {
+  if (!s) return "";
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}.${m[2]}`;
+  const d = new Date(String(s).replace(" ", "T"));
+  if (isNaN(d)) return String(s);
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function formatTarihKisa(s) {
@@ -565,14 +595,23 @@ function renderKart(h) {
   // Kültür özeti ve AB özeti
   let kulturBadge = "";
   if (h.kultur_takibi && h.kultur_takibi.length) {
-    // Her kültür grubunun (Kan, TAS, İdrar, Yara…) SON sonucu
-    const chipler = sonKulturler(h.kultur_takibi).map(([tur, k]) => {
-      const bekliyor = !k.sonuc || k.sonuc === "Bekleniyor";
-      const metin = bekliyor ? "Bekleniyor" : k.sonuc;
-      const sinif = bekliyor ? "bekliyor" : (uremeYokMu(k.sonuc) ? "temiz" : "ureme");
-      const baslik = `${tur} kültürü${k.tarih ? " — " + k.tarih : ""}`;
-      return `<span class="kultur-chip ${sinif}" title="${escHtml(baslik)}">${escHtml(tur)}: ${escHtml(metin)}</span>`;
-    }).join("");
+    // Her kültür grubu için bekleyen kayıt ve son gelen sonuç ayrı ayrı
+    const chipParcalari = [];
+    sonKulturler(h.kultur_takibi).forEach(g => {
+      if (g.bekleyen) {
+        chipParcalari.push(
+          `<span class="kultur-chip bekliyor" title="${escHtml(g.tur + " kültürü" + (g.bekleyen.tarih ? " — " + g.bekleyen.tarih : ""))}">` +
+          `${escHtml(g.tur)}: Bekleniyor</span>`);
+      }
+      if (g.sonuclu) {
+        const sinif = uremeYokMu(g.sonuclu.sonuc) ? "temiz" : "ureme";
+        const tarih = gunAy(g.sonuclu.tarih);
+        chipParcalari.push(
+          `<span class="kultur-chip ${sinif}" title="${escHtml(g.tur + " kültürü — " + (g.sonuclu.tarih || ""))}">` +
+          `${tarih ? escHtml(tarih) + " " : ""}${escHtml(g.tur)}: ${escHtml(g.sonuclu.sonuc)}</span>`);
+      }
+    });
+    const chipler = chipParcalari.join("");
     if (chipler) kulturBadge += `<div class="kultur-satiri">🧫 ${chipler}</div>`;
 
     // Antibiyotikler (Kültüre bağlı olanlar - Geriye dönük uyum)
