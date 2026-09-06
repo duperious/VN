@@ -24,24 +24,46 @@ else
 fi
 
 echo
-echo "=== 3/5  Güvenlik duvarı (80/443) ==="
-# Oracle'ın Ubuntu imajları SSH dışında her şeyi kapatır.
-# AYRICA OCI panelinden Security List'e de kural eklemeniz gerekir!
-for PORT in 80 443; do
-    if ! sudo iptables -C INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null; then
-        sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport "$PORT" -j ACCEPT
-    fi
-done
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables-persistent >/dev/null 2>&1 || true
-sudo netfilter-persistent save >/dev/null 2>&1 || true
-echo "80 ve 443 açıldı."
+echo "=== 3/6  Takas alanı (düşük bellekli sunucular) ==="
+# Google e2-micro gibi 1 GB bellekli makinelerde docker derlemesi bellek
+# yetmediği için yarıda kesilebiliyor. 2 GB'ın altındaysa takas alanı açılır.
+BELLEK_MB=$(free -m | awk '/^Mem:/{print $2}')
+TAKAS_MB=$(free -m | awk '/^Swap:/{print $2}')
+if [ "$BELLEK_MB" -lt 2000 ] && [ "$TAKAS_MB" -lt 512 ]; then
+    echo "Bellek ${BELLEK_MB} MB — 2 GB takas alanı açılıyor."
+    sudo fallocate -l 2G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile >/dev/null
+    sudo swapon /swapfile
+    grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+else
+    echo "Gerekmiyor (bellek ${BELLEK_MB} MB, takas ${TAKAS_MB} MB)."
+fi
 
 echo
-echo "=== 4/5  Uygulama derleniyor ==="
+echo "=== 4/6  Güvenlik duvarı (80/443) ==="
+# Oracle'ın imajlarında SSH dışında her şey kapalıdır; Google ve çoğu
+# sağlayıcıda INPUT zinciri boştur ve buna gerek yoktur. Sadece gerçekten
+# kısıtlı bir zincir varsa kural ekleniyor.
+if sudo iptables -S INPUT 2>/dev/null | grep -qE -- '-j (REJECT|DROP)|^-P INPUT DROP'; then
+    for PORT in 80 443; do
+        sudo iptables -C INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null \
+            || sudo iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
+    done
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables-persistent >/dev/null 2>&1 || true
+    sudo netfilter-persistent save >/dev/null 2>&1 || true
+    echo "80 ve 443 sunucu içinde açıldı."
+else
+    echo "Sunucu içi güvenlik duvarı kısıtlı değil, dokunulmadı."
+fi
+echo "NOT: Sağlayıcı panelinden de 80/443 açılmalı (Oracle: Security List, Google: VPC firewall)."
+
+echo
+echo "=== 5/6  Uygulama derleniyor ==="
 $DOCKER compose build
 
 echo
-echo "=== 5/5  Ayarlar ==="
+echo "=== 6/6  Ayarlar ==="
 if [ -f vizit.env ]; then
     echo "vizit.env zaten var, dokunulmuyor. Yeniden üretmek için önce silin."
 else
