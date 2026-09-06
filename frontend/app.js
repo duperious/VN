@@ -755,9 +755,22 @@ function renderKart(h) {
 
 function modalAc(id)  { document.getElementById(id).classList.add("open"); document.body.style.overflow = "hidden"; }
 function modalKapat(id) { document.getElementById(id).classList.remove("open"); document.body.style.overflow = ""; }
-function modalDisiTiklandi(e, id) { if (e.target === document.getElementById(id)) modalKapat(id); }
+// Hasta formu yanlışlıkla kapanmasın: kenardaki boşluğa tıklamak veya Escape,
+// doldurulmuş formu uyarmadan kapatıp girilen her şeyi siliyordu.
+// Bu modal yalnızca ✕ veya Kaydet ile kapanır.
+const KORUMALI_MODALLAR = ["hastaModal"];
 
-document.addEventListener("keydown", e => { if (e.key === "Escape") ["hastaModal", "detayModal"].forEach(modalKapat); });
+function modalDisiTiklandi(e, id) {
+  if (KORUMALI_MODALLAR.includes(id)) return;
+  if (e.target === document.getElementById(id)) modalKapat(id);
+}
+
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  ["hastaModal", "detayModal"].forEach(id => {
+    if (!KORUMALI_MODALLAR.includes(id)) modalKapat(id);
+  });
+});
 
 // ════════════════════════════════════════════════════════════════════════════
 // ── ÜNİTE SELECT & YATAK DROPDOWN (form içi)
