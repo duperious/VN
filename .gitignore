@@ -5,3 +5,14 @@ __pycache__/
 backend/vizit.db
 .antigravity/
 node_modules/
+.venv/
+venv/
+
+# Hasta verisi içeren aktarım dosyaları asla depoya girmemeli.
+# Depo herkese açık; baş harf kullanılsa bile tanı, kültür ve öykü bilgisi
+# yayınlanmış olur.
+araclar/*.json
+!araclar/ornek_hastalar.json
+
+# Sunucu ayarları — şifre hash'i ve JWT anahtarı içerir, depoya girmemeli
+dagitim/vizit.env

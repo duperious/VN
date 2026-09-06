@@ -5,14 +5,16 @@ Giriş koruması (bcrypt + JWT / Session), ünite filtresi, hasta takibi
 
 import os
 import json
-from datetime import datetime, timedelta
+import secrets
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
 import bcrypt
 import jwt
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Depends, Cookie, status
+from fastapi import FastAPI, HTTPException, Query, Depends, Cookie, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -31,14 +33,93 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 load_dotenv(Path(__file__).parent / ".env")
 
 AUTH_USERNAME = os.getenv("AUTH_USERNAME", "byieaharyb")
-AUTH_PASSWORD_HASH = os.getenv(
-    "AUTH_PASSWORD_HASH",
-    "$2b$12$fBW0Inz2q5h6A.LSF.WFnOcxNy9omGlFzqjZtXopNBAFx4qXLArX2"
-)
-JWT_SECRET = os.getenv("JWT_SECRET", "vizit_notu_secret_key_2026_x89f_secure_token_key")
+# Varsayılan hash kod deposunda açıkta duruyor. Mevcut kurulumu bozmamak için
+# korunuyor, ancak üretimde .env üzerinden ezilmeli.
+AUTH_PASSWORD_HASH = os.getenv("AUTH_PASSWORD_HASH", "")
+if not AUTH_PASSWORD_HASH:
+    AUTH_PASSWORD_HASH = "$2b$12$fBW0Inz2q5h6A.LSF.WFnOcxNy9omGlFzqjZtXopNBAFx4qXLArX2"
+    print(
+        "[UYARI] AUTH_PASSWORD_HASH tanımlı değil; kod içindeki varsayılan hash kullanılıyor. "
+        "Bu hash kod deposunda açıkta — .env dosyasına kendi hash'inizi ekleyin."
+    )
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    # Sabit bir varsayılan secret, token'ları herkesin üretebilmesi anlamına gelir.
+    # Tanımlı değilse her açılışta rastgele üret — güvenli ama restart'ta oturumlar düşer.
+    JWT_SECRET = secrets.token_urlsafe(48)
+    print(
+        "[UYARI] JWT_SECRET tanımlı değil; bu açılış için rastgele üretildi. "
+        "Sunucu her yeniden başladığında oturumlar düşecek. "
+        "Kalıcı oturumlar için .env dosyasına JWT_SECRET ekleyin."
+    )
 JWT_ALGORITHM = "HS256"
 
+# Oturum çerezinin "secure" bayrağı: açıkken tarayıcı çerezi yalnızca HTTPS
+# üzerinden gönderir. localhost HTTPS olmadığı için sabit açmak yerelde girişi
+# bozar; bu yüzden varsayılan davranış bağlantıya bakmak:
+#   - HTTPS istek  -> secure açık (Cloudflare Tunnel, Render vb. otomatik)
+#   - HTTP istek   -> secure kapalı (yerelde çalışmaya devam eder)
+# .env içindeki COOKIE_SECURE tanımlıysa bu otomatik karar ezilir.
+_cookie_secure_ham = os.getenv("COOKIE_SECURE", "").strip().lower()
+COOKIE_SECURE_AYAR = (
+    None if _cookie_secure_ham == ""
+    else _cookie_secure_ham in ("1", "true", "yes", "evet", "acik", "açık")
+)
+
+def cerez_secure_mi(request: Request) -> bool:
+    if COOKIE_SECURE_AYAR is not None:
+        return COOKIE_SECURE_AYAR
+    # uvicorn proxy başlıklarını okuduğu için ters vekil arkasında da doğru çalışır
+    return request.url.scheme == "https"
+
 security = HTTPBearer(auto_error=False)
+
+# ── Giriş denemesi sınırlama ──────────────────────────────────────────────────
+# Tek hesap ve tek şifre olduğu için, internete açık bir adreste sınırsız deneme
+# gerçek bir risk. Sayaç yalnızca bellekte tutulur: sunucu yeniden başlayınca
+# sıfırlanır (kendinizi kilitlerseniz kurtuluş yolu budur).
+GIRIS_MAX_DENEME = int(os.getenv("GIRIS_MAX_DENEME", "5"))
+GIRIS_KILIT_DAKIKA = int(os.getenv("GIRIS_KILIT_DAKIKA", "15"))
+
+# ip -> {"sayi": int, "ilk": datetime, "kilit_bitis": datetime | None}
+_giris_denemeleri: dict = {}
+
+def _istemci_ip(request: Request) -> str:
+    # uvicorn proxy başlıklarını çözdüğü için ters vekil arkasında da gerçek IP gelir
+    return request.client.host if request.client else "bilinmiyor"
+
+def giris_kilidi_kontrol(request: Request) -> None:
+    """Kilitliyse isteği reddeder. Doğru şifreyle bile açılmaz — aksi halde
+    kilit kaba kuvvet denemesini yavaşlatmazdı."""
+    kayit = _giris_denemeleri.get(_istemci_ip(request))
+    if not kayit or not kayit.get("kilit_bitis"):
+        return
+    simdi = datetime.now(timezone.utc)
+    if simdi >= kayit["kilit_bitis"]:
+        _giris_denemeleri.pop(_istemci_ip(request), None)   # kilit doldu, sıfırla
+        return
+    kalan = int((kayit["kilit_bitis"] - simdi).total_seconds() // 60) + 1
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=f"Çok fazla hatalı giriş denemesi. {kalan} dakika sonra tekrar deneyin.",
+    )
+
+def giris_basarisiz_kaydet(request: Request) -> None:
+    ip = _istemci_ip(request)
+    simdi = datetime.now(timezone.utc)
+    kayit = _giris_denemeleri.get(ip)
+    # Pencere dolduysa sayacı sıfırdan başlat
+    if not kayit or (simdi - kayit["ilk"]) > timedelta(minutes=GIRIS_KILIT_DAKIKA):
+        kayit = {"sayi": 0, "ilk": simdi, "kilit_bitis": None}
+    kayit["sayi"] += 1
+    if kayit["sayi"] >= GIRIS_MAX_DENEME:
+        kayit["kilit_bitis"] = simdi + timedelta(minutes=GIRIS_KILIT_DAKIKA)
+        print(f"[GÜVENLİK] {ip} adresinden {kayit['sayi']} hatalı giriş; "
+              f"{GIRIS_KILIT_DAKIKA} dakika kilitlendi.")
+    _giris_denemeleri[ip] = kayit
+
+def giris_basarili_temizle(request: Request) -> None:
+    _giris_denemeleri.pop(_istemci_ip(request), None)
 
 # ── Kimlik Doğrulama Yardımcıları ─────────────────────────────────────────────
 
@@ -59,7 +140,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(days=7))
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(days=7))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
@@ -97,22 +178,41 @@ async def get_current_user(
     return payload["sub"]
 
 # ── Uygulama ──────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
 app = FastAPI(
     title="Vizit Kağıdı API v2",
     description="Yoğun Bakım Servisi Hasta Takip Sistemi — Ünite destekli ve Güvenlikli",
     version="2.0.0",
+    lifespan=lifespan,
 )
+
+# CORS — varsayılan: çapraz kaynak erişim yok.
+# Arayüz API ile aynı adresten sunulduğu için tarayıcı bu istekleri CORS'a hiç
+# sokmaz; boş liste normal kullanımı etkilemez. Arayüz ayrı bir adreste
+# barındırılacaksa .env içinde tanımlayın:
+#   ALLOWED_ORIGINS=https://vizit.ornek.com,https://ikinci.ornek.com
+_origins_ham = os.getenv("ALLOWED_ORIGINS", "").strip()
+ALLOWED_ORIGINS = [o.strip() for o in _origins_ham.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    # Çerezli isteklere yalnızca açıkça izin verilen adresler için izin ver.
+    # "*" ile birlikte asla açılmamalı.
+    allow_credentials=bool(ALLOWED_ORIGINS),
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-def startup():
-    init_db()
+@app.get("/health", include_in_schema=False)
+def health():
+    """Dağıtım platformlarının sağlık kontrolü için."""
+    return {"status": "ok"}
 
 # ── Frontend static dosyaları ─────────────────────────────────────────────────
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
@@ -131,12 +231,15 @@ def root():
 # ═════════════════════════════════════════════════════════════════════════════
 
 @app.post("/api/auth/login", response_model=LoginResponse, tags=["Auth"])
-def login(req: LoginRequest, response: Response):
+def login(req: LoginRequest, request: Request, response: Response):
+    giris_kilidi_kontrol(request)
     if req.kullanici_adi != AUTH_USERNAME or not verify_password(req.sifre, AUTH_PASSWORD_HASH):
+        giris_basarisiz_kaydet(request)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Kullanıcı adı veya şifre hatalı.",
         )
+    giris_basarili_temizle(request)
     token = create_access_token({"sub": AUTH_USERNAME})
     response.set_cookie(
         key="vizit_token",
@@ -144,12 +247,20 @@ def login(req: LoginRequest, response: Response):
         httponly=True,
         max_age=7 * 24 * 3600,
         samesite="lax",
+        secure=cerez_secure_mi(request),
     )
     return LoginResponse(access_token=token, kullanici_adi=AUTH_USERNAME)
 
 @app.post("/api/auth/logout", tags=["Auth"])
-def logout(response: Response):
-    response.delete_cookie(key="vizit_token")
+def logout(request: Request, response: Response):
+    # Silme isteği çerezin yazıldığı bayraklarla eşleşmeli, aksi halde tarayıcı
+    # çerezi kaldırmayabilir.
+    response.delete_cookie(
+        key="vizit_token",
+        httponly=True,
+        samesite="lax",
+        secure=cerez_secure_mi(request),
+    )
     return {"message": "Başarıyla çıkış yapıldı."}
 
 @app.get("/api/auth/me", tags=["Auth"])
@@ -200,6 +311,51 @@ def _fetch_hasta(conn, hasta_id: int) -> Hasta:
     ).fetchall()
     return Hasta.from_row(row, epikriz)
 
+CIKIS_TURLERI = ("taburcu", "servis", "exitus", "sevk", "devir")
+
+# ── Denetim izi ───────────────────────────────────────────────────────────────
+
+def _hasta_ozet(row_veya_dict) -> str:
+    """Kayıt içine gömülecek hasta tanımı — hasta silinse de kim olduğu kalsın."""
+    if row_veya_dict is None:
+        return ""
+    d = dict(row_veya_dict)
+    return f"{d.get('unite', '')} / yatak {d.get('yatak_no', '')} / {d.get('ad_soyad', '')}".strip()
+
+def islem_kaydet(conn, kullanici: str, islem: str, hasta_id=None,
+                 hasta_ozet: str = "", detay: str = "") -> None:
+    """
+    Değişiklikleri denetim izine yazar. Çağıran fonksiyon commit eder.
+    Kayıt yazılamazsa asıl işlem engellenmesin diye hata yutulur ama loglanır.
+    """
+    try:
+        conn.execute(
+            "INSERT INTO islem_kayitlari (kullanici, islem, hasta_id, hasta_ozet, detay)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (kullanici, islem, hasta_id, hasta_ozet, detay),
+        )
+    except Exception as e:
+        print(f"[UYARI] İşlem kaydı yazılamadı ({islem}): {e}")
+
+def _yatak_dogrula(unite: str, yatak_no: str) -> str:
+    """Ünite kodunu ve yatak numarasını kapasiteye göre doğrular."""
+    if unite not in UNITE_KONFIG:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Geçersiz ünite: '{unite}'. Geçerli üniteler: {', '.join(UNITE_KONFIG)}",
+        )
+    try:
+        no = int(str(yatak_no).strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"Yatak no sayı olmalı: '{yatak_no}'")
+    kapasite = UNITE_KONFIG[unite]
+    if not (1 <= no <= kapasite):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{unite} ünitesinde yatak no 1-{kapasite} arasında olmalı (verilen: {no}).",
+        )
+    return str(no)
+
 def _hasta_to_db_params(hasta: HastaBase) -> tuple:
     """Model → DB kayıt parametreleri."""
     kd = hasta.klinik_durum or KlinikDurum()
@@ -209,6 +365,8 @@ def _hasta_to_db_params(hasta: HastaBase) -> tuple:
         hasta.yatak_no,
         hasta.ad_soyad,
         hasta.tani or "",
+        hasta.kilo,
+        hasta.boy,
         hasta.kabul_epikrizi or "",
         kd_json,
         json.dumps([i.model_dump() if hasattr(i, "model_dump") else i for i in (hasta.planlanan_islemler or [])], ensure_ascii=False),
@@ -252,8 +410,8 @@ def hasta_listesi(
     finally:
         conn.close()
 
-@app.post("/api/hastalar", response_model=Hasta, status_code=201, dependencies=[Depends(get_current_user)], tags=["Hastalar"])
-def hasta_ekle(hasta: HastaCreate):
+@app.post("/api/hastalar", response_model=Hasta, status_code=201, tags=["Hastalar"])
+def hasta_ekle(hasta: HastaCreate, user: str = Depends(get_current_user)):
     """Yeni hasta kaydı oluştur."""
     conn = get_connection()
     try:
@@ -271,14 +429,18 @@ def hasta_ekle(hasta: HastaCreate):
         cur = conn.execute(
             """
             INSERT INTO hastalar (
-                unite, yatak_no, ad_soyad, tani,
+                unite, yatak_no, ad_soyad, tani, kilo, boy,
                 kabul_epikrizi, klinik_durum,
                 planlanan_islemler, goruntuleme_tetkik, kultur_takibi,
                 antibiyotikler,
                 genel_not, cikis_turu, cikis_detayi, durum
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (*params, "aktif"),
+        )
+        islem_kaydet(
+            conn, user, "hasta_ekle", cur.lastrowid,
+            f"{hasta.unite} / yatak {hasta.yatak_no} / {hasta.ad_soyad}",
         )
         conn.commit()
         return _fetch_hasta(conn, cur.lastrowid)
@@ -293,12 +455,15 @@ def hasta_getir(hasta_id: int):
     finally:
         conn.close()
 
-@app.put("/api/hastalar/{hasta_id}", response_model=Hasta, dependencies=[Depends(get_current_user)], tags=["Hastalar"])
-def hasta_guncelle(hasta_id: int, hasta: HastaUpdate):
+@app.put("/api/hastalar/{hasta_id}", response_model=Hasta, tags=["Hastalar"])
+def hasta_guncelle(hasta_id: int, hasta: HastaUpdate, user: str = Depends(get_current_user)):
     """Hasta bilgilerini güncelle."""
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id, unite, yatak_no FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
+        row = conn.execute(
+            "SELECT id, unite, yatak_no, ad_soyad, durum, cikis_turu, cikis_detayi FROM hastalar WHERE id = ?",
+            (hasta_id,),
+        ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
 
@@ -313,57 +478,84 @@ def hasta_guncelle(hasta_id: int, hasta: HastaUpdate):
                     detail=f"{hasta.unite} ünitesinde {hasta.yatak_no} no'lu yatak dolu.",
                 )
 
-        params = _hasta_to_db_params(hasta)
+        # Düzenleme formu durum/çıkış alanlarını göndermez. Gönderilmediklerinde
+        # mevcut kayıt korunmalı; aksi halde taburcu hasta aktife döner ve
+        # çıkış bilgisi (exitus/sevk vb.) silinir.
+        params = list(_hasta_to_db_params(hasta))
+        if hasta.cikis_turu is None:
+            params[-2] = row["cikis_turu"]      # cikis_turu
+        if hasta.cikis_detayi is None:
+            params[-1] = row["cikis_detayi"]    # cikis_detayi
+        durum = hasta.durum or row["durum"]
+
         conn.execute(
             """
             UPDATE hastalar SET
                 unite = ?, yatak_no = ?, ad_soyad = ?, tani = ?,
+                kilo = ?, boy = ?,
                 kabul_epikrizi = ?, klinik_durum = ?,
                 planlanan_islemler = ?, goruntuleme_tetkik = ?, kultur_takibi = ?,
                 antibiyotikler = ?,
                 genel_not = ?, cikis_turu = ?, cikis_detayi = ?, durum = ?
             WHERE id = ?
             """,
-            (*params, hasta.durum, hasta_id),
+            (*params, durum, hasta_id),
         )
+        # Yatak/ünite değiştiyse kayda yaz — sonradan takip etmesi kolay olsun
+        detay = ""
+        if row["unite"] != hasta.unite or row["yatak_no"] != hasta.yatak_no:
+            detay = (f"{row['unite']}/{row['yatak_no']} → {hasta.unite}/{hasta.yatak_no}")
+        islem_kaydet(conn, user, "hasta_guncelle", hasta_id,
+                     f"{hasta.unite} / yatak {hasta.yatak_no} / {hasta.ad_soyad}", detay)
         conn.commit()
         return _fetch_hasta(conn, hasta_id)
     finally:
         conn.close()
 
-@app.patch("/api/hastalar/{hasta_id}/durum", dependencies=[Depends(get_current_user)], tags=["Hastalar"])
-def hasta_durum_degistir(hasta_id: int, durum: str = Query(...)):
+@app.patch("/api/hastalar/{hasta_id}/durum", tags=["Hastalar"])
+def hasta_durum_degistir(hasta_id: int, durum: str = Query(...), user: str = Depends(get_current_user)):
     if durum not in ("aktif", "taburcu"):
         raise HTTPException(status_code=400, detail="Geçersiz durum.")
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
+        row = conn.execute("SELECT * FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
-        
+
         if durum == "aktif":
             conn.execute("UPDATE hastalar SET durum = ?, cikis_turu = NULL, cikis_detayi = NULL WHERE id = ?", (durum, hasta_id))
         else:
             conn.execute("UPDATE hastalar SET durum = ? WHERE id = ?", (durum, hasta_id))
-            
+
+        islem_kaydet(conn, user, "durum_degistir", hasta_id, _hasta_ozet(row),
+                     f"{row['durum']} → {durum}")
         conn.commit()
         return {"id": hasta_id, "durum": durum}
     finally:
         conn.close()
 
-@app.post("/api/hastalar/{hasta_id}/cikis", dependencies=[Depends(get_current_user)], tags=["Hastalar"])
-def hasta_cikis_islemi(hasta_id: int, req: CikisRequest):
+@app.post("/api/hastalar/{hasta_id}/cikis", tags=["Hastalar"])
+def hasta_cikis_islemi(hasta_id: int, req: CikisRequest, user: str = Depends(get_current_user)):
     """Hasta çıkış/devir işlemlerini yapar."""
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id, unite, yatak_no FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
+        row = conn.execute("SELECT * FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
+
+        if req.islem_turu not in CIKIS_TURLERI:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Geçersiz işlem türü: '{req.islem_turu}'. "
+                       f"Geçerli değerler: {', '.join(CIKIS_TURLERI)}",
+            )
 
         if req.islem_turu == "devir":
             if not req.yeni_unite or not req.yeni_yatak_no:
                 raise HTTPException(status_code=400, detail="Yeni ünite ve yatak no zorunludur.")
-            
+
+            req.yeni_yatak_no = _yatak_dogrula(req.yeni_unite, req.yeni_yatak_no)
+
             mevcut = conn.execute(
                 "SELECT id FROM hastalar WHERE unite = ? AND yatak_no = ? AND durum = 'aktif'",
                 (req.yeni_unite, req.yeni_yatak_no),
@@ -384,7 +576,9 @@ def hasta_cikis_islemi(hasta_id: int, req: CikisRequest):
                 "INSERT INTO epikriz_notlari (hasta_id, not_metni) VALUES (?, ?)",
                 (hasta_id, not_metni),
             )
-            
+            islem_kaydet(conn, user, "devir", hasta_id, _hasta_ozet(row),
+                         f"{eski_unite}/{eski_yatak} → {req.yeni_unite}/{req.yeni_yatak_no}")
+
         else:
             conn.execute(
                 "UPDATE hastalar SET durum = 'taburcu', cikis_turu = ?, cikis_detayi = ? WHERE id = ?",
@@ -398,36 +592,45 @@ def hasta_cikis_islemi(hasta_id: int, req: CikisRequest):
                 "INSERT INTO epikriz_notlari (hasta_id, not_metni) VALUES (?, ?)",
                 (hasta_id, not_metni),
             )
+            islem_kaydet(conn, user, f"cikis_{req.islem_turu}", hasta_id,
+                         _hasta_ozet(row), req.detay or "")
 
         conn.commit()
         return {"id": hasta_id, "islem": req.islem_turu, "mesaj": "Başarılı"}
     finally:
         conn.close()
 
-@app.patch("/api/hastalar/{hasta_id}/kabul_epikrizi", response_model=Hasta, dependencies=[Depends(get_current_user)], tags=["Hastalar"])
-def kabul_epikrizi_guncelle(hasta_id: int, epikriz: EpikrizNotCreate):
+@app.patch("/api/hastalar/{hasta_id}/kabul_epikrizi", response_model=Hasta, tags=["Hastalar"])
+def kabul_epikrizi_guncelle(hasta_id: int, epikriz: EpikrizNotCreate, user: str = Depends(get_current_user)):
     """Kabul epikrizini güncelle."""
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
+        row = conn.execute("SELECT * FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
         conn.execute(
             "UPDATE hastalar SET kabul_epikrizi = ? WHERE id = ?",
             (epikriz.not_metni, hasta_id),
         )
+        islem_kaydet(conn, user, "kabul_epikrizi_guncelle", hasta_id, _hasta_ozet(row))
         conn.commit()
         return _fetch_hasta(conn, hasta_id)
     finally:
         conn.close()
 
-@app.delete("/api/hastalar/{hasta_id}", status_code=204, dependencies=[Depends(get_current_user)], tags=["Hastalar"])
-def hasta_sil(hasta_id: int):
+@app.delete("/api/hastalar/{hasta_id}", status_code=204, tags=["Hastalar"])
+def hasta_sil(hasta_id: int, user: str = Depends(get_current_user)):
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
+        row = conn.execute("SELECT * FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
+        # Hasta gidiyor; kim olduğu yalnızca bu kayıtta kalacak
+        not_sayisi = conn.execute(
+            "SELECT COUNT(*) FROM epikriz_notlari WHERE hasta_id = ?", (hasta_id,)
+        ).fetchone()[0]
+        islem_kaydet(conn, user, "hasta_sil", hasta_id, _hasta_ozet(row),
+                     f"tanı: {row['tani'] or '—'}; {not_sayisi} seyir notu birlikte silindi")
         conn.execute("DELETE FROM hastalar WHERE id = ?", (hasta_id,))
         conn.commit()
     finally:
@@ -437,17 +640,19 @@ def hasta_sil(hasta_id: int):
 # ── EPİKRİZ (Klinik Seyir Notları) ───────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@app.post("/api/hastalar/{hasta_id}/epikriz", response_model=EpikrizNot, status_code=201, dependencies=[Depends(get_current_user)], tags=["Epikriz"])
-def epikriz_not_ekle(hasta_id: int, not_: EpikrizNotCreate):
+@app.post("/api/hastalar/{hasta_id}/epikriz", response_model=EpikrizNot, status_code=201, tags=["Epikriz"])
+def epikriz_not_ekle(hasta_id: int, not_: EpikrizNotCreate, user: str = Depends(get_current_user)):
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
+        row = conn.execute("SELECT * FROM hastalar WHERE id = ?", (hasta_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Hasta bulunamadı")
         cur = conn.execute(
             "INSERT INTO epikriz_notlari (hasta_id, not_metni) VALUES (?, ?)",
             (hasta_id, not_.not_metni),
         )
+        islem_kaydet(conn, user, "epikriz_ekle", hasta_id, _hasta_ozet(row),
+                     f"not #{cur.lastrowid}")
         conn.commit()
         created = conn.execute("SELECT * FROM epikriz_notlari WHERE id = ?", (cur.lastrowid,)).fetchone()
         conn.execute(
@@ -471,14 +676,15 @@ def epikriz_listesi(hasta_id: int):
     finally:
         conn.close()
 
-@app.put("/api/epikriz/{epikriz_id}", response_model=EpikrizNot, dependencies=[Depends(get_current_user)], tags=["Epikriz"])
-def epikriz_not_duzenle(epikriz_id: int, not_: EpikrizNotCreate):
+@app.put("/api/epikriz/{epikriz_id}", response_model=EpikrizNot, tags=["Epikriz"])
+def epikriz_not_duzenle(epikriz_id: int, not_: EpikrizNotCreate, user: str = Depends(get_current_user)):
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id, hasta_id FROM epikriz_notlari WHERE id = ?", (epikriz_id,)).fetchone()
+        row = conn.execute("SELECT id, hasta_id, not_metni FROM epikriz_notlari WHERE id = ?", (epikriz_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Not bulunamadı")
-        
+
+        hasta = conn.execute("SELECT * FROM hastalar WHERE id = ?", (row["hasta_id"],)).fetchone()
         conn.execute(
             "UPDATE epikriz_notlari SET not_metni = ? WHERE id = ?",
             (not_.not_metni, epikriz_id)
@@ -487,20 +693,27 @@ def epikriz_not_duzenle(epikriz_id: int, not_: EpikrizNotCreate):
             "UPDATE hastalar SET guncelleme_tarihi = datetime('now','localtime') WHERE id = ?",
             (row["hasta_id"],)
         )
+        # Notun eski hali kayda giriyor — üzerine yazılan metin kaybolmasın
+        islem_kaydet(conn, user, "epikriz_duzenle", row["hasta_id"], _hasta_ozet(hasta),
+                     f"not #{epikriz_id}; eski metin: {row['not_metni']}")
         conn.commit()
         updated = conn.execute("SELECT * FROM epikriz_notlari WHERE id = ?", (epikriz_id,)).fetchone()
         return dict(updated)
     finally:
         conn.close()
 
-@app.delete("/api/epikriz/{epikriz_id}", status_code=204, dependencies=[Depends(get_current_user)], tags=["Epikriz"])
-def epikriz_not_sil(epikriz_id: int):
+@app.delete("/api/epikriz/{epikriz_id}", status_code=204, tags=["Epikriz"])
+def epikriz_not_sil(epikriz_id: int, user: str = Depends(get_current_user)):
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id, hasta_id FROM epikriz_notlari WHERE id = ?", (epikriz_id,)).fetchone()
+        row = conn.execute("SELECT id, hasta_id, not_metni FROM epikriz_notlari WHERE id = ?", (epikriz_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Not bulunamadı")
-        
+
+        hasta = conn.execute("SELECT * FROM hastalar WHERE id = ?", (row["hasta_id"],)).fetchone()
+        # Silinen notun metni kayda giriyor; başka yerde kalmıyor
+        islem_kaydet(conn, user, "epikriz_sil", row["hasta_id"], _hasta_ozet(hasta),
+                     f"not #{epikriz_id}; silinen metin: {row['not_metni']}")
         conn.execute("DELETE FROM epikriz_notlari WHERE id = ?", (epikriz_id,))
         conn.execute(
             "UPDATE hastalar SET guncelleme_tarihi = datetime('now','localtime') WHERE id = ?",
@@ -514,13 +727,79 @@ def epikriz_not_sil(epikriz_id: int):
 # ── PDF EXPORT ───────────────────────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _export_hastalari(durum: Optional[str], hasta_ids: Optional[str], unite: Optional[str]) -> list:
+    """Export uç noktalarının ortak hasta listesi sorgusu."""
+    conn = get_connection()
+    try:
+        conditions = []
+        params = []
+
+        if hasta_ids:
+            id_list = [int(x.strip()) for x in hasta_ids.split(",") if x.strip()]
+            placeholders = ",".join("?" * len(id_list))
+            sql = f"SELECT * FROM hastalar WHERE id IN ({placeholders}) ORDER BY CAST(yatak_no AS INTEGER)"
+            rows = conn.execute(sql, id_list).fetchall()
+        else:
+            if durum and durum != "tumu":
+                conditions.append("durum = ?")
+                params.append(durum)
+            if unite:
+                conditions.append("unite = ?")
+                params.append(unite)
+            where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+            sql = f"SELECT * FROM hastalar {where} ORDER BY unite, CAST(yatak_no AS INTEGER)"
+            rows = conn.execute(sql, params).fetchall()
+
+        hastalar = []
+        for row in rows:
+            h = dict(row)
+            epikriz = conn.execute(
+                "SELECT * FROM epikriz_notlari WHERE hasta_id = ? ORDER BY tarih ASC",
+                (row["id"],),
+            ).fetchall()
+            h["epikriz_notlari"] = [dict(e) for e in epikriz]
+            hastalar.append(h)
+        return hastalar
+    finally:
+        conn.close()
+
+
+@app.get("/api/export/html", dependencies=[Depends(get_current_user)], tags=["Export"])
+def export_html(
+    durum: Optional[str] = Query("aktif"),
+    hasta_ids: Optional[str] = Query(None),
+    unite: Optional[str] = Query(None),
+):
+    """
+    Yazdırma görünümü — PDF ile aynı şablon, ama WeasyPrint gerektirmez.
+    Tarayıcıdan Cmd/Ctrl+P ile PDF olarak kaydedilebilir; sistem kütüphanesi
+    eksik olan makinelerde PDF indirmenin yedek yolu.
+    """
+    from pdf_export import uret_html
+
+    hastalar = _export_hastalari(durum, hasta_ids, unite)
+    html = uret_html(hastalar, unite or "")
+    return Response(content=html, media_type="text/html; charset=utf-8")
+
+
 @app.get("/api/export/pdf", dependencies=[Depends(get_current_user)], tags=["Export"])
 def export_pdf(
     durum: Optional[str] = Query("aktif"),
     hasta_ids: Optional[str] = Query(None),
     unite: Optional[str] = Query(None),
 ):
-    from pdf_export import uret_pdf
+    # WeasyPrint sistem kütüphanelerini (pango/glib) içe aktarımda arar; eksikse
+    # burada patlar. Ham 500 yerine ne yapılacağını söyleyen bir hata döndür.
+    try:
+        from pdf_export import uret_pdf
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "PDF motoru yüklenemedi: " + str(e) +
+                " — macOS'ta 'brew install pango', Linux'ta libpango/libgobject paketleri gerekir."
+            ),
+        )
 
     conn = get_connection()
     try:
@@ -553,7 +832,18 @@ def export_pdf(
             h["epikriz_notlari"] = [dict(e) for e in epikriz]
             hastalar.append(h)
 
-        pdf_bytes = uret_pdf(hastalar)
+        try:
+            pdf_bytes = uret_pdf(hastalar, unite or "")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "PDF üretilemedi: " + str(e) +
+                    " — macOS'ta 'brew install pango' gerekebilir."
+                ),
+            )
 
         unite_str = f"_{unite}" if unite else ""
         return Response(

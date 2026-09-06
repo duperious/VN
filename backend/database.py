@@ -74,6 +74,8 @@ def init_db():
         "antibiyotikler": "TEXT DEFAULT '[]'",
         "cikis_turu":     "TEXT",
         "cikis_detayi":   "TEXT",
+        "kilo":           "REAL",
+        "boy":            "REAL",
     }
     # Eski tek-alan compat: ventilator/inotrop/ventilator_detay/inotrop_detay geride kalabilir
     for sutun, tanim in eklenecekler.items():
@@ -90,6 +92,24 @@ def init_db():
             tarih       TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
         )
     """)
+
+    # ── İşlem kayıtları (denetim izi) ─────────────────────────────────────────
+    # Yalnızca ekleme yapılır; uygulama bu kayıtları güncellemez veya silmez.
+    # hasta_id'ye bilerek foreign key konmadı: hasta silinse bile izi kalmalı,
+    # bu yüzden hastanın kim olduğu hasta_ozet alanında ayrıca saklanır.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS islem_kayitlari (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            tarih       TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+            kullanici   TEXT    NOT NULL,
+            islem       TEXT    NOT NULL,
+            hasta_id    INTEGER,
+            hasta_ozet  TEXT    DEFAULT '',
+            detay       TEXT    DEFAULT ''
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_islem_tarih ON islem_kayitlari(tarih)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_islem_hasta ON islem_kayitlari(hasta_id)")
 
     # ── Trigger: güncelleme_tarihi otomatik güncelle ─────────────────────────
     cur.execute("""

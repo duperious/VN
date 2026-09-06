@@ -152,6 +152,23 @@
               <input class="form-input" type="text" id="fTani" placeholder="Kabul tanısı…" />
             </div>
           </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="fKilo">Kilo (kg)</label>
+              <input class="form-input" type="number" id="fKilo" step="any" min="0"
+                     placeholder="örn. 70" oninput="antropometriGuncelle()" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="fBoy">Boy (cm)</label>
+              <input class="form-input" type="number" id="fBoy" step="any" min="0"
+                     placeholder="örn. 170" oninput="antropometriGuncelle()" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group" style="grid-column:1/-1;">
+              <div id="antropometriKutu" class="antropometri-kutu" style="display:none;"></div>
+            </div>
+          </div>
         </div>
 
         <!-- KLİNİK DURUM -->
@@ -170,7 +187,8 @@
               <label class="form-label">Solunum Desteği / Hava Yolu</label>
               <select class="form-select" id="fHavaYolu" onchange="havaYoluDegisti()">
                 <option value="">— Seçin —</option>
-                <option value="Entübe/Trakeostomili">Entübe / Trakeostomili</option>
+                <option value="Entübe">Entübe</option>
+                <option value="Trakeostomili">Trakeostomili</option>
                 <option value="Entübe değil">Entübe değil</option>
               </select>
             </div>
@@ -183,7 +201,7 @@
                 <label class="form-label" for="fEntubeDestek">Destek Türü</label>
                 <select class="form-select" id="fEntubeDestek" onchange="entubeDestekDegisti()">
                   <option value="">— Seçin —</option>
-                  <option value="Oda havası">Oda havası (T-tüp/trach collar, spontan)</option>
+                  <option value="Oda havası">Oda havası</option>
                   <option value="Humidvent">Humidvent</option>
                   <option value="T-tüp">T-tüp</option>
                   <option value="Mekanik ventilatöre bağlı">Mekanik ventilatöre bağlı</option>
@@ -250,6 +268,44 @@
               </svg>
               İnotrop ajan ekle
             </button>
+
+            <!-- Dirençli şokta inotropun yanında giden ek tedaviler.
+                 inotAjanlarDiv içinde oldukları için inotrop işaretlenmeden görünmezler. -->
+            <div class="form-row" style="margin-top:12px;">
+              <div class="form-group">
+                <label class="form-label">Bikarbonat İnfüzyonu</label>
+                <label class="toggle-group" id="bikarbonatToggleGroup" style="margin-top:4px;">
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="fBikarbonatVar" onchange="vaskulerToggle('bikarbonat')" />
+                    <div class="toggle-track"></div>
+                    <div class="toggle-thumb"></div>
+                  </div>
+                  <span class="toggle-label" id="bikarbonatLabel">Almıyor</span>
+                </label>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Metilen Mavisi</label>
+                <label class="toggle-group" id="metilenToggleGroup" style="margin-top:4px;">
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="fMetilenVar" onchange="vaskulerToggle('metilen')" />
+                    <div class="toggle-track"></div>
+                    <div class="toggle-thumb"></div>
+                  </div>
+                  <span class="toggle-label" id="metilenLabel">Almıyor</span>
+                </label>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Hidrokortizon</label>
+                <label class="toggle-group" id="hidrokortizonToggleGroup" style="margin-top:4px;">
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="fHidrokortizonVar" onchange="vaskulerToggle('hidrokortizon')" />
+                    <div class="toggle-track"></div>
+                    <div class="toggle-thumb"></div>
+                  </div>
+                  <span class="toggle-label" id="hidrokortizonLabel">Almıyor</span>
+                </label>
+              </div>
+            </div>
           </div>
 
           <!-- Sedasyon -->
@@ -281,7 +337,7 @@
           <div class="form-row" style="margin-top:10px; grid-template-columns:1fr 1fr 1fr;">
             <div class="form-group">
               <label class="form-label" for="fBeslenme">Beslenme</label>
-              <select class="form-select" id="fBeslenme">
+              <select class="form-select" id="fBeslenme" onchange="beslenmeDegisti()">
                 <option>Yok</option>
                 <option>Enteral</option>
                 <option>Parenteral</option>
@@ -290,8 +346,12 @@
             </div>
             <div class="form-group">
               <label class="form-label" for="fDiurez">Diürez</label>
-              <input class="form-input" type="text" id="fDiurez"
-                     placeholder="örn. 800 ml/gün" />
+              <select class="form-select" id="fDiurez">
+                <option value="">—</option>
+                <option>Var</option>
+                <option>Yok</option>
+                <option>Kısıtlı</option>
+              </select>
             </div>
             <div class="form-group">
               <label class="form-label" for="fIrPupil">IR / Pupil</label>
@@ -303,6 +363,18 @@
                 <option>Bilateral -/-</option>
                 <option>Değerlendirilemedi</option>
               </select>
+            </div>
+          </div>
+          <!-- Enteral beslenme yolu (birden fazla seçilebilir) -->
+          <div class="form-row" id="beslenmeYoluDiv" style="display:none; margin-top:8px;">
+            <div class="form-group" style="grid-column:1/-1;">
+              <label class="form-label">Enteral Yol (birden fazla seçilebilir)</label>
+              <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:4px;" id="fBeslenmeYollariGroup">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="Oral"> Oral</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="NG"> NG</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="OG"> OG</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" value="PEG"> PEG</label>
+              </div>
             </div>
           </div>
         </div>
@@ -335,7 +407,7 @@
               <select class="form-select" id="fCvpYer">
                 <option value="">— Seçin —</option>
                 <option>SC (Subklavyen)</option>
-                <option>İJVC (İnternal Juguler)</option>
+                <option>İJV (İnternal Juguler)</option>
                 <option>Femoral</option>
               </select>
             </div>
@@ -359,7 +431,7 @@
               <select class="form-select" id="fDiyalizKatYer">
                 <option value="">— Seçin —</option>
                 <option>SC (Subklavyen)</option>
-                <option>İJVC (İnternal Juguler)</option>
+                <option>İJV (İnternal Juguler)</option>
                 <option>Femoral</option>
                 <option>Fistül</option>
               </select>
@@ -422,6 +494,7 @@
               </div>
             </div>
           </div>
+
         </div>
 
         <!-- KABUL EPİKRİZİ -->

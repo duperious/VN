@@ -1,6 +1,6 @@
 """
 pdf_export.py — v2
-Playwright/Chromium ile HTML→PDF dönüşümü.
+WeasyPrint ile HTML→PDF dönüşümü.
 Yeni alanlar: unite, klinik_durum (yapılandırılmış), kabul_epikrizi / seyir_notlari ayrımı.
 """
 
@@ -8,6 +8,10 @@ import json
 from datetime import datetime
 from typing import List
 from jinja2 import Environment, BaseLoader
+
+from ilaclar import (
+    ajan_ozeti, vki_hesapla, vki_sinifi, kalori_ihtiyaci, ENTUBE_DEGERLERI,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -77,6 +81,11 @@ VIZIT_TEMPLATE = """
   }
   .kd-value { font-size: 8.5pt; color: #111827; white-space: pre-wrap; }
   .kd-value.bos { color: #9ca3af; font-style: italic; }
+  .kd-alt { font-size: 7pt; color: #6b7280; font-weight: normal; }
+  /* İlaç satırları: pre-wrap kapalı, tek satırda kompakt dursun */
+  .ilac-satir { white-space: normal; line-height: 1.25; margin-bottom: 1px; }
+  .doz-aralikta { color: #047857; font-weight: 700; }
+  .doz-dusuk, .doz-yuksek { color: #b91c1c; font-weight: 700; }
   .kd-value.vent-renk { color: #dc2626; font-weight: 600; }
   .kd-value.inot-renk { color: #ea580c; font-weight: 600; }
   .kd-value.sed-renk  { color: #7c3aed; font-weight: 600; }
@@ -154,6 +163,9 @@ VIZIT_TEMPLATE = """
     <div style="flex:1;">
       <div class="h-ad">{{ hasta.ad_soyad }}</div>
       {% if hasta.tani %}<div class="h-tani">{{ hasta.tani }}</div>{% endif %}
+      {% if hasta.kilo or hasta.boy %}
+        <div class="h-tani">{% if hasta.kilo %}{{ hasta.kilo | sayi }} kg{% endif %}{% if hasta.boy %} · {{ hasta.boy | sayi(0) }} cm{% endif %}{% if hasta.vki %} · VKİ {{ hasta.vki | sayi(1) }} ({{ hasta.vki_sinifi }}){% endif %}</div>
+      {% endif %}
     </div>
     <div class="badges">
       {% if kd.vent_var %}<span class="badge vent">VENT</span>{% endif %}
@@ -170,8 +182,8 @@ VIZIT_TEMPLATE = """
     <div class="klinik-grid">
       <div class="kd-alan">
         <div class="kd-label">Solunum / Hava Yolu</div>
-        {% if kd.hava_yolu == 'Entübe/Trakeostomili' %}
-          <div class="kd-value vent-renk">Entübe/Trakeostomili<br><span style="font-weight:normal;color:#111827">{{ kd.entube_destek }}{% if kd.entube_destek == 'Mekanik ventilatöre bağlı' and kd.vent_mod %} — {{ kd.vent_mod }}{% endif %}</span></div>
+        {% if kd.hava_yolu in entube_degerleri %}
+          <div class="kd-value vent-renk">{{ kd.hava_yolu }}<br><span style="font-weight:normal;color:#111827">{{ kd.entube_destek }}{% if kd.entube_destek == 'Mekanik ventilatöre bağlı' and kd.vent_mod %} — {{ kd.vent_mod }}{% endif %}</span></div>
         {% elif kd.hava_yolu == 'Entübe değil' and kd.non_entube_destek %}
           <div class="kd-value vent-renk">Entübe Değil<br><span style="font-weight:normal;color:#111827">{{ kd.non_entube_destek | join(', ') }}</span></div>
         {% elif kd.vent_var %}
@@ -182,9 +194,15 @@ VIZIT_TEMPLATE = """
       </div>
       <div class="kd-alan">
         <div class="kd-label">İnotrop / Vazopressör</div>
-        {% if kd.inot_var and kd.inot_ajanlar %}
-          {% for a in kd.inot_ajanlar %}
-            <div class="kd-value inot-renk">{{ a.ajan }}{% if a.doz %} {{ a.doz }}{% endif %}</div>
+        {% if kd.inot_var and kd.inot_ozetleri %}
+          {# Tek satırda tutuluyor: .kd-value pre-wrap olduğu için şablondaki
+             satır sonları çıktıda gerçek satır atlamasına dönüşür. #}
+          {% for o in kd.inot_ozetleri %}
+            {% if o.tabloda %}
+              <div class="kd-value inot-renk ilac-satir">{{ o.ajan }}{% if o.carpan > 1 %} x{{ o.carpan }}{% endif %}{% if o.hiz_cc_saat is not none %} {{ o.hiz_cc_saat | sayi }} cc/h{% endif %}{% if o.doz is not none %} <span class="doz-{{ o.durum }}">{{ o.doz | sayi(3) }} {{ o.doz_birimi }}</span>{% elif o.metin %} {{ o.metin }}{% endif %} <span class="kd-alt">({{ o.miktar | sayi }}{{ o.miktar_birimi }}/{{ o.hacim_cc | sayi }}cc · {{ o.min_doz | sayi }}-{{ o.max_doz | sayi }})</span></div>
+            {% else %}
+              <div class="kd-value inot-renk ilac-satir">{{ o.ajan }}{% if o.metin %} {{ o.metin }}{% endif %}</div>
+            {% endif %}
           {% endfor %}
         {% elif kd.inot_var %}
           <div class="kd-value inot-renk">Kullanılıyor</div>
@@ -196,7 +214,7 @@ VIZIT_TEMPLATE = """
         <div class="kd-label">Sedasyon</div>
         {% if kd.sed_var and kd.sed_ajanlar %}
           {% for a in kd.sed_ajanlar %}
-            <div class="kd-value sed-renk">{{ a.ajan }}{% if a.doz %} {{ a.doz }}{% endif %}</div>
+            <div class="kd-value sed-renk ilac-satir">{{ a.ajan }}{% if a.hiz_cc_saat is not none %} {{ a.hiz_cc_saat | sayi }} cc/h{% elif a.doz %} {{ a.doz }}{% endif %}</div>
           {% endfor %}
         {% elif kd.sed_var %}
           <div class="kd-value sed-renk">Kullanılıyor</div>
@@ -206,9 +224,10 @@ VIZIT_TEMPLATE = """
       </div>
       <div class="kd-alan">
         <div class="kd-label">Beslenme</div>
-        <div class="kd-value {% if not kd.beslenme or kd.beslenme == 'Yok' %}bos{% endif %}">
-          {{ kd.beslenme or '—' }}
-        </div>
+        <div class="kd-value ilac-satir {% if not kd.beslenme or kd.beslenme == 'Yok' %}bos{% endif %}">{{ kd.beslenme or '—' }}{% if kd.beslenme_yollari %} ({{ kd.beslenme_yollari | join('/') }}){% endif %}</div>
+        {% if hasta.kalori %}
+          <div class="kd-alt">{{ hasta.kalori.min }}–{{ hasta.kalori.max }} kcal/gün</div>
+        {% endif %}
       </div>
       <div class="kd-alan">
         <div class="kd-label">Diürez</div>
@@ -221,7 +240,7 @@ VIZIT_TEMPLATE = """
     </div>
 
     <!-- Vasküler Erişim & Renal Takip -->
-    {% if kd.cvp_var or kd.diyaliz_kateter_var or kd.diyaliz_var or kd.crrt_var %}
+    {% if kd.cvp_var or kd.diyaliz_kateter_var or kd.diyaliz_var or kd.crrt_var or kd.bikarbonat_var or kd.metilen_mavisi_var or kd.hidrokortizon_var %}
     <div class="ek-bolum" style="margin-top:4px;">
       <div class="ek-baslik">Vasküler Erişim &amp; Renal Takip</div>
       <div class="klinik-grid" style="grid-template-columns:1fr 1fr 1fr 1fr; margin-bottom:0; padding-bottom:0; border-bottom:none;">
@@ -255,6 +274,18 @@ VIZIT_TEMPLATE = """
           <div class="kd-label">CRRT</div>
           {% if kd.crrt_var %}
             <div class="kd-value inot-renk">Alıyor{% if kd.crrt_tipi %} ({{ kd.crrt_tipi }}){% endif %}{% if kd.crrt_baslangic %} <br><span style="font-size:10px;">Bşl: {{ kd.crrt_baslangic }}{% if kd.crrt_gun %} — {{ kd.crrt_gun }}{% endif %}</span>{% endif %}</div>
+          {% else %}
+            <div class="kd-value bos">—</div>
+          {% endif %}
+        </div>
+        <div class="kd-alan">
+          <div class="kd-label">Şok Ek Tedavileri</div>
+          {% set ek = [] %}
+          {% if kd.bikarbonat_var %}{% set _ = ek.append('Bikarbonat inf.') %}{% endif %}
+          {% if kd.metilen_mavisi_var %}{% set _ = ek.append('Metilen mavisi') %}{% endif %}
+          {% if kd.hidrokortizon_var %}{% set _ = ek.append('Hidrokortizon') %}{% endif %}
+          {% if ek %}
+            <div class="kd-value inot-renk ilac-satir">{{ ek | join(', ') }}</div>
           {% else %}
             <div class="kd-value bos">—</div>
           {% endif %}
@@ -297,24 +328,9 @@ VIZIT_TEMPLATE = """
       </div>
       {% endfor %}
 
+      {# Her kültür tek satırda: tür, tarih ve sonuç yan yana #}
       {% for k in hasta.kultur_takibi %}
-      <div class="ek-satir" style="align-items:flex-start; flex-direction:column; padding-bottom:4px; border-bottom:1px solid #eee; margin-top:2px;">
-        <div style="display:flex; width:100%; justify-content:space-between; margin-bottom:1px;">
-          <span><strong>🧫 {{ k.tur }} Kx.</strong> <span class="ek-tarih" style="width:auto; margin-left:8px;">{{ k.tarih or '—' }}</span></span>
-        </div>
-        <div style="font-size:8.5pt;">
-          {% if not k.sonuc or k.sonuc == 'Bekleniyor' %}
-            <span style="color:#d97706;">Sonuç Bekleniyor</span>
-          {% else %}
-            <span>Sonuç: {{ k.sonuc }}</span>
-          {% endif %}
-        </div>
-        {% if k.antibiyotik_adi %}
-        <div style="font-size:8.5pt; color:#059669;">
-          💊 AB: {{ k.antibiyotik_adi }} {% if k.ab_gun %}({{ k.ab_gun }}){% endif %}
-        </div>
-        {% endif %}
-      </div>
+      <div class="ek-satir"><span class="ek-tarih" style="min-width:58px;">{{ k.tarih or '—' }}</span><span><strong>🧫 {{ k.tur }} Kx.</strong> {% if not k.sonuc or k.sonuc == 'Bekleniyor' %}<span style="color:#d97706;">Sonuç Bekleniyor</span>{% else %}<span>{{ k.sonuc }}</span>{% endif %}{% if k.antibiyotik_adi %} <span style="color:#059669;">💊 {{ k.antibiyotik_adi }}{% if k.ab_gun %} ({{ k.ab_gun }}){% endif %}</span>{% endif %}</span></div>
       {% endfor %}
     </div>
     {% endif %}
@@ -483,7 +499,15 @@ def _hazirla_hasta(h: dict) -> dict:
     kd.setdefault("crrt_var", False)
     kd.setdefault("crrt_baslangic", "")
     kd.setdefault("crrt_tipi", "")
+    kd.setdefault("bikarbonat_var", False)
+    kd.setdefault("metilen_mavisi_var", False)
+    kd.setdefault("hidrokortizon_var", False)
+    kd.setdefault("beslenme_yollari", [])
     
+    # İnotrop ajanlarını hazırlık + hız + hesaplanan doz olarak zenginleştir
+    kilo = h.get("kilo")
+    kd["inot_ozetleri"] = [ajan_ozeti(a, kilo) for a in kd.get("inot_ajanlar", []) if a and a.get("ajan")]
+
     if kd.get("crrt_var") and kd.get("crrt_baslangic"):
         try:
             crrt_tarih = datetime.strptime(kd["crrt_baslangic"], "%Y-%m-%d").date()
@@ -493,8 +517,12 @@ def _hazirla_hasta(h: dict) -> dict:
         except Exception:
             pass
 
+    vki = vki_hesapla(kilo, h.get("boy"))
     return {
         **h,
+        "vki": vki,
+        "vki_sinifi": vki_sinifi(vki),
+        "kalori": kalori_ihtiyaci(kilo),
         "klinik_durum": kd,
         "planlanan_islemler": islemler,
         "goruntuleme_tetkik": tetkikler,
@@ -507,44 +535,48 @@ def _hazirla_hasta(h: dict) -> dict:
     }
 
 
+def _sayi_yaz(deger, basamak: int = 2) -> str:
+    """Sayıyı gereksiz sıfırlar olmadan, virgüllü Türkçe biçimde yazar."""
+    if deger is None or deger == "":
+        return ""
+    try:
+        s = f"{float(deger):.{basamak}f}"
+    except (TypeError, ValueError):
+        return str(deger)
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return (s or "0").replace(".", ",")
+
+
 def _html_olustur(hastalar: list, unite_filtre: str = "") -> str:
     hazir = [_hazirla_hasta(dict(h)) for h in hastalar]
     env = Environment(loader=BaseLoader())
+    env.filters["sayi"] = _sayi_yaz
     tmpl = env.from_string(VIZIT_TEMPLATE)
     return tmpl.render(
         hastalar=hazir,
         now=datetime.now().strftime("%d.%m.%Y %H:%M"),
         unite_filtre=unite_filtre,
+        entube_degerleri=ENTUBE_DEGERLERI,
     )
 
 
 def uret_pdf(hastalar: list, unite_filtre: str = "") -> bytes:
     """
-    Playwright/Chromium ile HTML→PDF dönüşümü.
-    Eş zamanlı çağrı uyumlu — her çağrı kendi event loop'unu yönetir.
+    WeasyPrint ile HTML→PDF dönüşümü.
+    Sayfa boyutu ve kenar boşlukları şablondaki @page kuralından gelir.
     """
     html_str = _html_olustur(hastalar, unite_filtre)
 
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
+        from weasyprint import HTML
+    except ImportError as e:
         raise RuntimeError(
-            "Playwright kurulu değil. "
-            "Lütfen 'py -m pip install playwright && py -m playwright install chromium' çalıştırın."
-        )
+            "WeasyPrint kurulu değil. "
+            "Lütfen 'pip install -r backend/requirements.txt' çalıştırın."
+        ) from e
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.set_content(html_str, wait_until="domcontentloaded")
-        pdf_bytes = page.pdf(
-            format="A4",
-            margin={"top": "11mm", "right": "13mm", "bottom": "11mm", "left": "13mm"},
-            print_background=True,
-        )
-        browser.close()
-
-    return pdf_bytes
+    return HTML(string=html_str).write_pdf()
 
 
 def uret_html(hastalar: list, unite_filtre: str = "") -> str:

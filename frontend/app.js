@@ -17,6 +17,184 @@ const UNITE_KONFIG = {
 };
 const UNITE_LISTESI = Object.keys(UNITE_KONFIG);
 
+// ── İNOTROP / VAZOPRESSÖR HAZIRLIK TABLOSU ──────────────────────────────────
+// DİKKAT: backend/ilaclar.py içindeki ILAC_TABLOSU ile birebir aynı olmalıdır.
+// Biri değişirse diğeri de değişmeli (PDF çıktısı backend tablosunu kullanır).
+// baz_miktar = x1 hazırlıkta hacim_cc içine konan miktar.
+// kisa: hasta kartında yer dar olduğu için kullanılan kısaltma
+const ILAC_TABLOSU = {
+  "Noradrenalin": { kisa: "NA", baz_miktar: 8,   hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 0.1,  max_doz: 4,    kilo_bazli: true  },
+  "Adrenalin":    { kisa: "AD", baz_miktar: 8,   hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 0.05, max_doz: 2,    kilo_bazli: true  },
+  "Dopamin":      { kisa: "DP", baz_miktar: 400, hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 3,    max_doz: 20,   kilo_bazli: true  },
+  "Dobutamin":    { kisa: "DB", baz_miktar: 500, hacim_cc: 100, miktar_birimi: "mg",    doz_birimi: "mcg/kg/dk", min_doz: 2,    max_doz: 20,   kilo_bazli: true  },
+  "Vazopressin":  { kisa: "VP", baz_miktar: 20,  hacim_cc: 100, miktar_birimi: "ünite", doz_birimi: "ünite/dk",  min_doz: 0.01, max_doz: 0.07, kilo_bazli: false },
+};
+const ILAC_LISTESI = Object.keys(ILAC_TABLOSU);
+const CARPANLAR = [1, 2, 4];
+
+// Sedasyon/analjezi/nöromusküler bloker infüzyonları.
+// İnotroplardan farklı: doz aralığı hesaplanmaz, yalnızca infüzyon hızı (cc/h) tutulur.
+const SEDASYON_ILACLARI = [
+  "Midazolam", "Fentanyl", "Deksmedetomidin",
+  "Tiyopental", "Propofol", "Rokuronyum",
+];
+
+// Hava yolu: eski kayıtlarda "Entübe/Trakeostomili" tek seçenekti, artık ayrı seçiliyor.
+const ENTUBE_DEGERLERI = ["Entübe", "Trakeostomili", "Entübe/Trakeostomili"];
+const entubeMi = (v) => ENTUBE_DEGERLERI.includes(v);
+
+// ESPEN yoğun bakım: 25-30 kcal/kg/gün
+const KCAL_MIN_PER_KG = 25;
+const KCAL_MAX_PER_KG = 30;
+
+// ── Hesap yardımcıları ──────────────────────────────────────────────────────
+
+function sayi(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const f = parseFloat(String(v).replace(",", "."));
+  return isNaN(f) ? null : f;
+}
+
+/**
+ * Uygulanan dozu hesaplar.
+ *   konsantrasyon (mcg/cc) = miktar_mg * 1000 / hacim_cc
+ *   doz (mcg/kg/dk)        = hiz * konsantrasyon / (60 * kilo)
+ * Vazopressin kilo bazlı değildir: doz (ünite/dk) = hiz * (ünite/cc) / 60
+ */
+function dozHesapla(ajan, miktar, hacimCc, hizCcSaat, kilo) {
+  const bilgi = ILAC_TABLOSU[ajan];
+  if (!bilgi) return { doz: null, birim: "", durum: null };
+  const m = sayi(miktar), hac = sayi(hacimCc), hiz = sayi(hizCcSaat), kg = sayi(kilo);
+  const sonuc = { doz: null, birim: bilgi.doz_birimi, durum: null,
+                  min_doz: bilgi.min_doz, max_doz: bilgi.max_doz };
+  if (!m || !hac || hiz === null) return sonuc;
+
+  let doz;
+  if (bilgi.kilo_bazli) {
+    if (!kg) return sonuc;                       // kilo yoksa hesaplanamaz
+    doz = (hiz * ((m * 1000) / hac)) / (60 * kg);
+  } else {
+    doz = (hiz * (m / hac)) / 60;
+  }
+  sonuc.doz = doz;
+  sonuc.durum = doz < bilgi.min_doz ? "dusuk" : doz > bilgi.max_doz ? "yuksek" : "aralikta";
+  return sonuc;
+}
+
+/** Hedef doz için gereken pompa hızı (cc/saat). */
+function hizHesapla(ajan, hedefDoz, miktar, hacimCc, kilo) {
+  const bilgi = ILAC_TABLOSU[ajan];
+  const m = sayi(miktar), hac = sayi(hacimCc), kg = sayi(kilo), hedef = sayi(hedefDoz);
+  if (!bilgi || hedef === null || !m || !hac) return null;
+  if (bilgi.kilo_bazli) {
+    if (!kg) return null;
+    return (hedef * kg * 60) / ((m * 1000) / hac);
+  }
+  return (hedef * 60) / (m / hac);
+}
+
+function vkiHesapla(kilo, boyCm) {
+  const kg = sayi(kilo), boy = sayi(boyCm);
+  if (!kg || !boy) return null;
+  const m = boy / 100;
+  return kg / (m * m);
+}
+
+function vkiSinifi(vki) {
+  if (vki === null) return "";
+  if (vki < 18.5) return "Zayıf";
+  if (vki < 25)   return "Normal";
+  if (vki < 30)   return "Fazla kilolu";
+  if (vki < 35)   return "Obez (sınıf I)";
+  if (vki < 40)   return "Obez (sınıf II)";
+  return "Obez (sınıf III)";
+}
+
+function kaloriIhtiyaci(kilo) {
+  const kg = sayi(kilo);
+  if (!kg) return null;
+  return { min: Math.round(kg * KCAL_MIN_PER_KG), max: Math.round(kg * KCAL_MAX_PER_KG) };
+}
+
+// ── Kültür özeti ────────────────────────────────────────────────────────────
+
+// "Üreme yok" anlamına gelen serbest metin kalıpları — sonucu yeşil göstermek için.
+// Bu kalıplardan hiçbirini içermeyen sonuç üreme kabul edilip kırmızı gösterilir.
+const TEMIZ_KALIPLARI = [
+  "üreme yok", "üreme olmadı", "üreme saptanmadı", "temiz",
+  "negatif", "steril", "normal flora",
+];
+
+function uremeYokMu(sonuc) {
+  const s = (sonuc || "").toLocaleLowerCase("tr");
+  return TEMIZ_KALIPLARI.some(k => s.includes(k));
+}
+
+/**
+ * Her kültür türü için ekranda gösterilecek kayıtları seçer.
+ * Tür başına en fazla iki kayıt döner:
+ *   bekleyen — o türün en yeni kaydı hâlâ sonuçsuzsa
+ *   sonuclu  — sonucu gelmiş EN YENİ kayıt (daha eskiler gösterilmez)
+ * Böylece "Kan: Bekleniyor" ile "03.09 Kan: E.coli" aynı anda görünebilir:
+ * bugün gönderilen kültür beklenirken önceki sonuç gözden kaybolmaz.
+ */
+function bekliyorMu(k) {
+  return !k || !k.sonuc || k.sonuc === "Bekleniyor";
+}
+
+function sonKulturler(liste) {
+  const gruplar = new Map();
+  (liste || []).forEach(k => {
+    if (!k || !k.tur) return;
+    const g = gruplar.get(k.tur) || { tur: k.tur, enYeni: null, sonuclu: null };
+    // Tarihi olan en yeni kayıt; tarih yoksa listedeki son kayıt kazanır
+    if (!g.enYeni || (k.tarih || "") >= (g.enYeni.tarih || "")) g.enYeni = k;
+    if (!bekliyorMu(k) && (!g.sonuclu || (k.tarih || "") >= (g.sonuclu.tarih || ""))) g.sonuclu = k;
+    gruplar.set(k.tur, g);
+  });
+  return [...gruplar.values()].map(g => ({
+    tur: g.tur,
+    // Bekleyen yalnızca o türün EN YENİ kaydı sonuçsuzsa gösterilir; sonuç
+    // gelmişken duran eski bir "bekleniyor" kaydı yanıltıcı olurdu.
+    bekleyen: bekliyorMu(g.enYeni) ? g.enYeni : null,
+    sonuclu: g.sonuclu,
+  }));
+}
+
+/**
+ * Sayıyı okunur biçimde kısaltır (0,1 / 12,5 / 1667).
+ * Sondaki sıfırlar YALNIZCA ondalık kısımda kırpılır — aksi halde 100 → 1 olurdu.
+ */
+function dozYaz(v, basamak = 2) {
+  if (v === null || v === undefined || v === "") return "";
+  let s = Number(v).toFixed(basamak);
+  if (s.includes(".")) s = s.replace(/0+$/, "").replace(/\.$/, "");
+  return s.replace(".", ",");
+}
+
+/**
+ * Kaydedilmiş bir inotrop kaydını kart/detay/PDF'te gösterilecek metne çevirir.
+ * Tabloda olmayan ajanlar (Diğer / eski kayıtlar) serbest metin olarak döner.
+ */
+function inotOzeti(a, kilo) {
+  const bilgi = ILAC_TABLOSU[a?.ajan];
+  if (!bilgi) {
+    return { tabloda: false, ajan: a?.ajan || "", metin: a?.doz || "", durum: null };
+  }
+  const carpan = a.carpan || 1;
+  const miktar = sayi(a.miktar) || bilgi.baz_miktar * carpan;
+  const hacim  = sayi(a.hacim_cc) || bilgi.hacim_cc;
+  const h = dozHesapla(a.ajan, miktar, hacim, a.hiz_cc_saat, kilo);
+  return {
+    tabloda: true, ajan: a.ajan, kisa: bilgi.kisa, carpan, miktar, hacim,
+    miktar_birimi: bilgi.miktar_birimi,
+    hiz: sayi(a.hiz_cc_saat),
+    doz: h.doz, doz_birimi: h.birim, durum: h.durum,
+    min_doz: bilgi.min_doz, max_doz: bilgi.max_doz,
+    metin: a.doz || "",   // hız girilmemiş eski kayıtların serbest metin dozu
+  };
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // ── GLOBAL DURUM
 // ════════════════════════════════════════════════════════════════════════════
@@ -126,7 +304,7 @@ function oturumKapatArayuzu() {
   if (logoutBtn) logoutBtn.style.display = "none";
   tumHastalar = [];
   gosterilen = [];
-  renderHastalar();
+  renderHersey();
 }
 
 async function oturumKontrol() {
@@ -174,6 +352,20 @@ function formatTarih(s) {
   const d = new Date(s.replace(" ", "T"));
   if (isNaN(d)) return s;
   return d.toLocaleString("tr-TR", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit" });
+}
+
+/**
+ * Kültür çipleri için kısa tarih: "03.09". Tarih yoksa boş döner.
+ * ISO tarih (2026-09-03) doğrudan metinden okunuyor: new Date() bunu UTC gece
+ * yarısı sayar, UTC'nin gerisindeki saat dilimlerinde gün bir geri kayardı.
+ */
+function gunAy(s) {
+  if (!s) return "";
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}.${m[2]}`;
+  const d = new Date(String(s).replace(" ", "T"));
+  if (isNaN(d)) return String(s);
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function formatTarihKisa(s) {
@@ -365,7 +557,12 @@ function renderKart(h) {
 
   // Rozetler
   let ikonlar = "";
-  if (klDurum.hava_yolu || klDurum.vent_var) ikonlar += `<span class="durum-ikon vent">🫁 ${klDurum.hava_yolu === "Entübe/Trakeostomili" ? "ENT" : klDurum.hava_yolu === "Entübe değil" ? "NONENT" : "VENT"}</span>`;
+  if (klDurum.hava_yolu || klDurum.vent_var) {
+    const hyKisa = klDurum.hava_yolu === "Trakeostomili" ? "TRAK"
+                 : entubeMi(klDurum.hava_yolu) ? "ENT"
+                 : klDurum.hava_yolu === "Entübe değil" ? "NONENT" : "VENT";
+    ikonlar += `<span class="durum-ikon vent">🫁 ${hyKisa}</span>`;
+  }
   if (klDurum.inot_var)  ikonlar += `<span class="durum-ikon inot">💉 İNOT</span>`;
   if (klDurum.sed_var)   ikonlar += `<span class="durum-ikon sed">💊 SED</span>`;
   if (klDurum.crrt_var) {
@@ -395,15 +592,28 @@ function renderKart(h) {
     yakBadge += `<div class="yaklasan-badge" style="background:rgba(14,165,233,.12);border-color:#0ea5e9;color:#0ea5e9">💧 ${diyalizUyari === "bugün" ? "Bugün diyaliz günü" : "Yarın diyaliz günü"}</div>`;
   }
 
-  // Kültür uyarıları ve AB özeti
+  // Kültür özeti ve AB özeti
   let kulturBadge = "";
   if (h.kultur_takibi && h.kultur_takibi.length) {
-    const bekleyenler = h.kultur_takibi.filter(k => k.sonuc === "Bekleniyor" || !k.sonuc);
-    if (bekleyenler.length) {
-      const bTxt = bekleyenler.map(b => b.tur).join(", ");
-      kulturBadge += `<div class="yaklasan-badge" style="background:rgba(245,158,11,.12);border-color:#f59e0b;color:#d97706">🧫 ${escHtml(bTxt)} Kx. Sonuç Bekleniyor</div>`;
-    }
-    
+    // Her kültür grubu için bekleyen kayıt ve son gelen sonuç ayrı ayrı
+    const chipParcalari = [];
+    sonKulturler(h.kultur_takibi).forEach(g => {
+      if (g.bekleyen) {
+        chipParcalari.push(
+          `<span class="kultur-chip bekliyor" title="${escHtml(g.tur + " kültürü" + (g.bekleyen.tarih ? " — " + g.bekleyen.tarih : ""))}">` +
+          `${escHtml(g.tur)}: Bekleniyor</span>`);
+      }
+      if (g.sonuclu) {
+        const sinif = uremeYokMu(g.sonuclu.sonuc) ? "temiz" : "ureme";
+        const tarih = gunAy(g.sonuclu.tarih);
+        chipParcalari.push(
+          `<span class="kultur-chip ${sinif}" title="${escHtml(g.tur + " kültürü — " + (g.sonuclu.tarih || ""))}">` +
+          `${tarih ? escHtml(tarih) + " " : ""}${escHtml(g.tur)}: ${escHtml(g.sonuclu.sonuc)}</span>`);
+      }
+    });
+    const chipler = chipParcalari.join("");
+    if (chipler) kulturBadge += `<div class="kultur-satiri">🧫 ${chipler}</div>`;
+
     // Antibiyotikler (Kültüre bağlı olanlar - Geriye dönük uyum)
     const aktifKulturAbler = (h.kultur_takibi || []).filter(k => k.antibiyotik_adi);
     // Bağımsız antibiyotikler
@@ -435,8 +645,8 @@ function renderKart(h) {
 
   // Klinik kısa bilgiler
   let klBilgi = [];
-  if (klDurum.hava_yolu === "Entübe/Trakeostomili") {
-    let s = "Entübe";
+  if (entubeMi(klDurum.hava_yolu)) {
+    let s = klDurum.hava_yolu === "Trakeostomili" ? "Trakeostomili" : "Entübe";
     if (klDurum.entube_destek === "Mekanik ventilatöre bağlı" && klDurum.vent_mod) s += ` — ${klDurum.vent_mod}`;
     else if (klDurum.entube_destek) s += ` — ${klDurum.entube_destek}`;
     klBilgi.push(`<span style="color:var(--clr-vent);font-size:.75rem">🫁 ${escHtml(s)}</span>`);
@@ -452,9 +662,59 @@ function renderKart(h) {
   } else if (klDurum.vent_var && klDurum.vent_mod) {
     klBilgi.push(`<span style="color:var(--clr-vent);font-size:.75rem">🫁 ${escHtml(klDurum.vent_mod)}</span>`);
   }
-  if (klDurum.beslenme && klDurum.beslenme !== "Yok") klBilgi.push(`<span style="color:var(--clr-text-muted);font-size:.75rem">🍽 ${escHtml(klDurum.beslenme)}</span>`);
+  if (klDurum.beslenme && klDurum.beslenme !== "Yok") {
+    const yollar = (klDurum.beslenme_yollari || []).length
+      ? ` (${klDurum.beslenme_yollari.join("/")})` : "";
+    klBilgi.push(`<span style="color:var(--clr-text-muted);font-size:.75rem">🍽 ${escHtml(klDurum.beslenme + yollar)}</span>`);
+  }
   if (klDurum.ir_pupil) klBilgi.push(`<span style="color:var(--clr-text-muted);font-size:.75rem">👁 ${escHtml(klDurum.ir_pupil)}</span>`);
   const klBilgiHtml = klBilgi.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:5px;">${klBilgi.join("")}</div>` : "";
+
+  // İnotrop özeti — ilaç, hazırlık katı, pompa hızı ve hesaplanan doz
+  let inotHtml = "";
+  const inotAjanlari = (klDurum.inot_ajanlar || []).filter(a => a && a.ajan);
+  if (klDurum.inot_var && inotAjanlari.length) {
+    const chipler = inotAjanlari.map(a => {
+      const o = inotOzeti(a, h.kilo);
+      if (!o.tabloda) {
+        return `<span class="inot-chip">${escHtml(o.ajan)}${o.metin ? " " + escHtml(o.metin) : ""}</span>`;
+      }
+      // Kartta yer dar — kısaltma kullan (NA/AD/DP/DB/VP), tam adı title'da göster
+      const parca = [o.kisa];
+      if (o.carpan > 1) parca.push(`x${o.carpan}`);
+      if (o.hiz !== null) parca.push(`${dozYaz(o.hiz, 1)} cc/h`);
+      const dozStr = o.doz !== null
+        ? ` → ${dozYaz(o.doz, 3)} ${o.doz_birimi}`
+        : (o.metin ? ` ${escHtml(o.metin)}` : "");
+      const baslik = o.doz !== null
+        ? `${o.ajan} — ${o.miktar} ${o.miktar_birimi}/${o.hacim} cc · aralık ${o.min_doz}-${o.max_doz} ${o.doz_birimi}`
+        : `${o.ajan} — hesap için kilo ve hız gerekli`;
+      return `<span class="inot-chip ${o.durum || ""}" title="${escHtml(baslik)}">${parca.join(" ")}${dozStr}</span>`;
+    }).join("");
+    inotHtml = `<div class="inot-satiri">💉 ${chipler}</div>`;
+  }
+
+  // Sedasyon özeti — ilaç + infüzyon hızı
+  let sedHtml = "";
+  const sedAjanlari = (klDurum.sed_ajanlar || []).filter(a => a && a.ajan);
+  if (klDurum.sed_var && sedAjanlari.length) {
+    const chipler = sedAjanlari.map(a => {
+      const hiz = sayi(a.hiz_cc_saat);
+      const detay = hiz !== null ? ` ${dozYaz(hiz, 1)} cc/h` : (a.doz ? ` ${escHtml(a.doz)}` : "");
+      return `<span class="sed-chip">${escHtml(a.ajan)}${detay}</span>`;
+    }).join("");
+    sedHtml = `<div class="sed-satiri">💊 ${chipler}</div>`;
+  }
+
+  // Dirençli şok ek tedavileri (inotropun yanında giden)
+  const ekTedaviler = [
+    klDurum.bikarbonat_var && "Bikarbonat inf.",
+    klDurum.metilen_mavisi_var && "Metilen mavisi",
+    klDurum.hidrokortizon_var && "Hidrokortizon",
+  ].filter(Boolean);
+  const bikarbonatHtml = ekTedaviler.length
+    ? `<div class="yaklasan-badge" style="background:rgba(56,189,248,.12);border-color:#38bdf8;color:#38bdf8">🧪 ${escHtml(ekTedaviler.join(" · "))}</div>`
+    : "";
 
   return `
     <div class="hasta-kart ${yaklasan && !isTaburcu ? "yaklasan-islem" : ""} ${isTaburcu ? "taburcu" : ""}"
@@ -470,6 +730,9 @@ function renderKart(h) {
       </div>
       <div class="kart-body">
         ${klBilgiHtml}
+        ${inotHtml}
+        ${sedHtml}
+        ${bikarbonatHtml}
         ${kulturBadge}
         ${notOnizleme}
         ${yakBadge}
@@ -497,9 +760,22 @@ function renderKart(h) {
 
 function modalAc(id)  { document.getElementById(id).classList.add("open"); document.body.style.overflow = "hidden"; }
 function modalKapat(id) { document.getElementById(id).classList.remove("open"); document.body.style.overflow = ""; }
-function modalDisiTiklandi(e, id) { if (e.target === document.getElementById(id)) modalKapat(id); }
+// Hasta formu yanlışlıkla kapanmasın: kenardaki boşluğa tıklamak veya Escape,
+// doldurulmuş formu uyarmadan kapatıp girilen her şeyi siliyordu.
+// Bu modal yalnızca ✕ veya Kaydet ile kapanır.
+const KORUMALI_MODALLAR = ["hastaModal"];
 
-document.addEventListener("keydown", e => { if (e.key === "Escape") ["hastaModal", "detayModal"].forEach(modalKapat); });
+function modalDisiTiklandi(e, id) {
+  if (KORUMALI_MODALLAR.includes(id)) return;
+  if (e.target === document.getElementById(id)) modalKapat(id);
+}
+
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  ["hastaModal", "detayModal"].forEach(id => {
+    if (!KORUMALI_MODALLAR.includes(id)) modalKapat(id);
+  });
+});
 
 // ════════════════════════════════════════════════════════════════════════════
 // ── ÜNİTE SELECT & YATAK DROPDOWN (form içi)
@@ -586,7 +862,7 @@ function formTemizle() {
   document.querySelectorAll('#fNonEntubeDestekGroup input[type="checkbox"]').forEach(cb => cb.checked = false);
 
   // Vasküler erişim sıfırla
-  ["cvp","diyalizKat","diyaliz","crrt"].forEach(t => {
+  ["cvp","diyalizKat","diyaliz","crrt","bikarbonat","metilen","hidrokortizon"].forEach(t => {
     const cbId = t === "cvp" ? "fCvpVar" : t === "diyalizKat" ? "fDiyalizKatVar" : t === "diyaliz" ? "fDiyalizVar" : "fCrrtVar";
     const el = document.getElementById(cbId);
     if (el) el.checked = false;
@@ -600,21 +876,30 @@ function formTemizle() {
   document.getElementById("antibiyotikList").innerHTML = "";
   document.getElementById("inotAjanList").innerHTML = "";
   document.getElementById("sedAjanList").innerHTML  = "";
+  document.querySelectorAll('#fBeslenmeYollariGroup input[type="checkbox"]').forEach(cb => cb.checked = false);
+  beslenmeDegisti();
+  antropometriGuncelle();
 }
 
 function formDoldur(h) {
   document.getElementById("fAdSoyad").value       = h.ad_soyad || "";
   document.getElementById("fTani").value          = h.tani || "";
+  document.getElementById("fKilo").value          = h.kilo ?? "";
+  document.getElementById("fBoy").value           = h.boy ?? "";
   document.getElementById("fKabulEpikrizi").value = h.kabul_epikrizi || "";
   document.getElementById("fGenelNot").value      = h.genel_not || "";
+  antropometriGuncelle();
 
   const klDurum = h.klinik_durum || {};
 
   // Solunum / Hava Yolu
-  document.getElementById("fHavaYolu").value = klDurum.hava_yolu || "";
+  // Eski kayıtlardaki birleşik "Entübe/Trakeostomili" değeri artık seçenek
+  // listesinde yok; formda "Entübe" olarak göster.
+  const havaYolu = klDurum.hava_yolu === "Entübe/Trakeostomili" ? "Entübe" : (klDurum.hava_yolu || "");
+  document.getElementById("fHavaYolu").value = havaYolu;
   havaYoluDegisti();
-  
-  if (klDurum.hava_yolu === "Entübe/Trakeostomili") {
+
+  if (entubeMi(klDurum.hava_yolu)) {
     document.getElementById("fEntubeDestek").value = klDurum.entube_destek || "";
     entubeDestekDegisti();
     
@@ -637,19 +922,45 @@ function formDoldur(h) {
     });
   }
 
-  // İnotrop
+  // İnotrop — updateToggle liste boşsa otomatik boş satır ekler; kayıtlı ajan
+  // varsa o boş satırı atıp yerine kayıtlıları koy (yoksa formda boş satır kalır)
   document.getElementById("fInotVar").checked = !!klDurum.inot_var;
   updateToggle("inot");
-  (klDurum.inot_ajanlar || []).forEach(a => ajanEkle("inot", a));
+  const inotKayitli = klDurum.inot_ajanlar || [];
+  if (inotKayitli.length) {
+    document.getElementById("inotAjanList").innerHTML = "";
+    inotKayitli.forEach(a => ajanEkle("inot", a));
+  }
 
   // Sedasyon
   document.getElementById("fSedVar").checked = !!klDurum.sed_var;
   updateToggle("sed");
-  (klDurum.sed_ajanlar || []).forEach(a => ajanEkle("sed", a));
+  const sedKayitli = klDurum.sed_ajanlar || [];
+  if (sedKayitli.length) {
+    document.getElementById("sedAjanList").innerHTML = "";
+    sedKayitli.forEach(a => ajanEkle("sed", a));
+  }
 
   // Beslenme / Diürez / IR
   document.getElementById("fBeslenme").value = klDurum.beslenme || "Yok";
-  document.getElementById("fDiurez").value   = klDurum.diurez || "";
+  beslenmeDegisti();
+  const yollar = klDurum.beslenme_yollari || [];
+  document.querySelectorAll('#fBeslenmeYollariGroup input[type="checkbox"]').forEach(cb => {
+    cb.checked = yollar.includes(cb.value);
+  });
+  // Diürez artık Var/Yok/Kısıtlı listesi. Eski kayıtlarda "Aktif", "Mevcut",
+  // "+" gibi serbest değerler var; listede karşılığı olmayan bir değer gelirse
+  // seçenek olarak ekleniyor. Aksi halde select boş kalır ve kaydedince
+  // hastanın mevcut diürez bilgisi sessizce silinirdi.
+  const diurezSel = document.getElementById("fDiurez");
+  const diurezDeger = klDurum.diurez || "";
+  if (diurezDeger && ![...diurezSel.options].some(o => o.value === diurezDeger)) {
+    const o = document.createElement("option");
+    o.value = diurezDeger;
+    o.textContent = diurezDeger + " (eski kayıt)";
+    diurezSel.appendChild(o);
+  }
+  diurezSel.value = diurezDeger;
   document.getElementById("fIrPupil").value  = klDurum.ir_pupil || "";
 
   // Vasküler Erişim & Renal Takip
@@ -673,6 +984,14 @@ function formDoldur(h) {
   document.getElementById("fCrrtVar").checked = !!klDurum.crrt_var;
   vaskulerToggle("crrt");
   if (klDurum.crrt_var && klDurum.crrt_baslangic) document.getElementById("fCrrtBaslangic").value = klDurum.crrt_baslangic;
+  if (klDurum.crrt_var && klDurum.crrt_tipi) document.getElementById("fCrrtTipi").value = klDurum.crrt_tipi;
+
+  document.getElementById("fBikarbonatVar").checked = !!klDurum.bikarbonat_var;
+  vaskulerToggle("bikarbonat");
+  document.getElementById("fMetilenVar").checked = !!klDurum.metilen_mavisi_var;
+  vaskulerToggle("metilen");
+  document.getElementById("fHidrokortizonVar").checked = !!klDurum.hidrokortizon_var;
+  vaskulerToggle("hidrokortizon");
 
   // Planlanan işlemler
   (h.planlanan_islemler || []).forEach(i => islemEkle(i));
@@ -718,6 +1037,9 @@ function vaskulerToggle(tip) {
     diyalizKat:{ cb:"fDiyalizKatVar",lbl:"diyalizKatLabel",grp:"diyalizKatToggleGroup",on:"Var",      off:"Yok",      div:"diyalizKatYerDiv" },
     diyaliz:   { cb:"fDiyalizVar",   lbl:"diyalizLabel",   grp:"diyalizToggleGroup",   on:"Alıyor",  off:"Almıyor",  div:"diyalizGunleriDiv" },
     crrt:      { cb:"fCrrtVar",      lbl:"crrtLabel",      grp:"crrtToggleGroup",      on:"Alıyor",  off:"Almıyor",  div:"crrtDetayDiv" },
+    bikarbonat:{ cb:"fBikarbonatVar",lbl:"bikarbonatLabel",grp:"bikarbonatToggleGroup",on:"Alıyor",  off:"Almıyor" },
+    metilen:   { cb:"fMetilenVar",   lbl:"metilenLabel",   grp:"metilenToggleGroup",   on:"Alıyor",  off:"Almıyor" },
+    hidrokortizon:{ cb:"fHidrokortizonVar", lbl:"hidrokortizonLabel", grp:"hidrokortizonToggleGroup", on:"Alıyor", off:"Almıyor" },
   };
   const m = map[tip]; if (!m) return;
   const cb  = document.getElementById(m.cb);
@@ -730,27 +1052,236 @@ function vaskulerToggle(tip) {
   if (m.div) document.getElementById(m.div).style.display = aktif ? "block" : "none";
 }
 
-// Ajan ekle/çıkar (inot / sed)
+// ── Kilo / boy → VKİ ve kalori kutusu ───────────────────────────────────────
+function antropometriGuncelle() {
+  const kilo = sayi(document.getElementById("fKilo")?.value);
+  const boy  = sayi(document.getElementById("fBoy")?.value);
+  const kutu = document.getElementById("antropometriKutu");
+  if (!kutu) return;
+
+  const parcalar = [];
+  const vki = vkiHesapla(kilo, boy);
+  if (vki !== null) {
+    parcalar.push(`<span><strong>VKİ:</strong> ${dozYaz(vki, 1)} kg/m² <span class="antro-etiket">${vkiSinifi(vki)}</span></span>`);
+  }
+  const kcal = kaloriIhtiyaci(kilo);
+  if (kcal) {
+    parcalar.push(`<span><strong>Günlük kalori:</strong> ${kcal.min}–${kcal.max} kcal/gün <span class="antro-etiket">${KCAL_MIN_PER_KG}–${KCAL_MAX_PER_KG} kcal/kg</span></span>`);
+  }
+  if (vki !== null && vki >= 30) {
+    parcalar.push(`<span class="antro-uyari">⚠ VKİ ≥ 30 — obezitede düzeltilmiş vücut ağırlığı üzerinden hesap önerilir</span>`);
+  }
+
+  kutu.innerHTML = parcalar.join("");
+  kutu.style.display = parcalar.length ? "flex" : "none";
+
+  // Kilo değişince açık inotrop satırlarının dozu da değişir
+  document.querySelectorAll("#inotAjanList .ajan-item").forEach(el => inotHesapla(el.dataset.uid));
+}
+
+// ── Ajan ekle/çıkar (inot / sed) ────────────────────────────────────────────
+let _ajanSayac = 0;
+
 function ajanEkle(tip, data = null) {
-  const listId = tip + "AjanList";
-  const liste = document.getElementById(listId);
-  const idx = Date.now();
+  const liste = document.getElementById(tip + "AjanList");
+  if (!liste) return;
   const div = document.createElement("div");
-  div.className = "ajan-item";
+
+  // Sedasyon: sabit ilaç listesi + infüzyon hızı (doz aralığı hesaplanmaz)
+  if (tip !== "inot") {
+    const secili = data?.ajan || "";
+    const digerMi = !!secili && !SEDASYON_ILACLARI.includes(secili);
+    div.className = "ajan-item ajan-sed";
+    div.innerHTML = `
+      <div class="ajan-inot-ust">
+        <select class="form-select ajan-adi" onchange="sedAjanDegisti(this)">
+          <option value="">— İlaç seçin —</option>
+          ${SEDASYON_ILACLARI.map(i => `<option value="${i}" ${i === secili ? "selected" : ""}>${i}</option>`).join("")}
+          <option value="__diger__" ${digerMi ? "selected" : ""}>Diğer (elle yaz)</option>
+        </select>
+        <label class="ajan-mini ajan-sed-hiz" style="display:${digerMi ? "none" : "flex"};">Hız
+          <span class="ajan-birimli">
+            <input class="form-input ajan-hiz" type="number" step="any" min="0"
+                   value="${data?.hiz_cc_saat ?? ""}" /><span>cc/h</span>
+          </span>
+        </label>
+        <button type="button" class="btn-remove-item" onclick="this.closest('.ajan-item').remove()" title="Kaldır">✕</button>
+      </div>
+      <div class="ajan-diger" style="display:${digerMi ? "grid" : "none"};">
+        <input class="form-input ajan-diger-ad" type="text" placeholder="Ajan adı"
+               value="${escHtml(digerMi ? secili : "")}" />
+        <input class="form-input ajan-diger-doz" type="text" placeholder="Doz / hız (örn. 5 cc/h)"
+               value="${escHtml(data?.doz || "")}" />
+      </div>`;
+    liste.appendChild(div);
+    return;
+  }
+
+  // İnotrop: hazırlık + hız + canlı doz hesabı
+  const uid = "ia" + (++_ajanSayac);
+  const secili = data?.ajan || "";
+  const tablodaVar = !!ILAC_TABLOSU[secili];
+  const digerMi = !!secili && !tablodaVar;
+  const carpan = data?.carpan || 1;
+
+  div.className = "ajan-item ajan-inot";
+  div.dataset.uid = uid;
   div.innerHTML = `
-    <input class="form-input ajan-adi" type="text" placeholder="Ajan adı (örn. Noradrenalin)"
-           value="${escHtml(data?.ajan || "")}" data-tip="${tip}" data-field="ajan" />
-    <input class="form-input ajan-doz" type="text" placeholder="Doz (örn. 0.2 mcg/kg/dk)"
-           value="${escHtml(data?.doz || "")}" data-tip="${tip}" data-field="doz" />
-    <button type="button" class="btn-remove-item" onclick="this.parentElement.remove()" title="Kaldır">✕</button>`;
+    <div class="ajan-inot-ust">
+      <select class="form-select ajan-adi" onchange="inotAjanDegisti('${uid}')">
+        <option value="">— İlaç seçin —</option>
+        ${ILAC_LISTESI.map(i => `<option value="${i}" ${i === secili ? "selected" : ""}>${i}</option>`).join("")}
+        <option value="__diger__" ${digerMi ? "selected" : ""}>Diğer (elle yaz)</option>
+      </select>
+      <button type="button" class="btn-remove-item" onclick="this.closest('.ajan-item').remove()" title="Kaldır">✕</button>
+    </div>
+
+    <div class="ajan-hazirlik" style="display:${tablodaVar ? "grid" : "none"};">
+      <label class="ajan-mini">Hazırlık
+        <select class="form-select ajan-carpan" onchange="inotCarpanDegisti('${uid}')">
+          ${CARPANLAR.map(c => `<option value="${c}" ${c === carpan ? "selected" : ""}>x${c}</option>`).join("")}
+        </select>
+      </label>
+      <label class="ajan-mini">Hacim
+        <span class="ajan-birimli">
+          <input class="form-input ajan-hacim" type="number" step="any" min="1"
+                 value="${data?.hacim_cc ?? ""}" oninput="inotHesapla('${uid}')" /><span>cc</span>
+        </span>
+      </label>
+      <label class="ajan-mini">Miktar
+        <span class="ajan-birimli">
+          <input class="form-input ajan-miktar" type="number" step="any" min="0"
+                 value="${data?.miktar ?? ""}" oninput="inotHesapla('${uid}')" /><span class="ajan-miktar-birim">mg</span>
+        </span>
+      </label>
+      <label class="ajan-mini">Hız
+        <span class="ajan-birimli">
+          <input class="form-input ajan-hiz" type="number" step="any" min="0"
+                 value="${data?.hiz_cc_saat ?? ""}" oninput="inotHesapla('${uid}')" /><span>cc/h</span>
+        </span>
+      </label>
+    </div>
+
+    <div class="ajan-diger" style="display:${digerMi ? "grid" : "none"};">
+      <input class="form-input ajan-diger-ad" type="text" placeholder="Ajan adı"
+             value="${escHtml(digerMi ? secili : "")}" />
+      <input class="form-input ajan-diger-doz" type="text" placeholder="Doz (örn. 0.1 mcg/kg/dk)"
+             value="${escHtml(data?.doz || "")}" />
+    </div>
+
+    <div class="ajan-sonuc" style="display:none;"></div>`;
+
   liste.appendChild(div);
+  if (tablodaVar) {
+    // Kayıtta hazırlık değeri yoksa tablodaki varsayılanı doldur
+    if (data?.hacim_cc == null) div.querySelector(".ajan-hacim").value = ILAC_TABLOSU[secili].hacim_cc;
+    if (data?.miktar == null)   div.querySelector(".ajan-miktar").value = ILAC_TABLOSU[secili].baz_miktar * carpan;
+  }
+  inotHesapla(uid);
+}
+
+function _ajanSatir(uid) {
+  return document.querySelector(`#inotAjanList .ajan-item[data-uid="${uid}"]`);
+}
+
+/** Sedasyonda "Diğer" seçilince hız kutusu yerine serbest metin alanları gösterilir. */
+function sedAjanDegisti(sel) {
+  const el = sel.closest(".ajan-item");
+  const diger = sel.value === "__diger__";
+  el.querySelector(".ajan-sed-hiz").style.display = diger ? "none" : "flex";
+  el.querySelector(".ajan-diger").style.display   = diger ? "grid" : "none";
+}
+
+/** İlaç seçimi değişti: hazırlık alanlarını tablodaki baz değerlerle doldur. */
+function inotAjanDegisti(uid) {
+  const el = _ajanSatir(uid); if (!el) return;
+  const secim = el.querySelector(".ajan-adi").value;
+  const diger = secim === "__diger__";
+  const bilgi = ILAC_TABLOSU[secim];
+
+  el.querySelector(".ajan-hazirlik").style.display = bilgi ? "grid" : "none";
+  el.querySelector(".ajan-diger").style.display    = diger ? "grid" : "none";
+
+  if (bilgi) {
+    const carpan = parseInt(el.querySelector(".ajan-carpan").value, 10) || 1;
+    el.querySelector(".ajan-hacim").value  = bilgi.hacim_cc;
+    el.querySelector(".ajan-miktar").value = bilgi.baz_miktar * carpan;
+    el.querySelector(".ajan-miktar-birim").textContent = bilgi.miktar_birimi;
+  }
+  inotHesapla(uid);
+}
+
+/** x1/x2/x4 değişti: torbadaki miktarı baz × çarpan olarak güncelle. */
+function inotCarpanDegisti(uid) {
+  const el = _ajanSatir(uid); if (!el) return;
+  const bilgi = ILAC_TABLOSU[el.querySelector(".ajan-adi").value];
+  if (!bilgi) return;
+  const carpan = parseInt(el.querySelector(".ajan-carpan").value, 10) || 1;
+  el.querySelector(".ajan-miktar").value = bilgi.baz_miktar * carpan;
+  inotHesapla(uid);
+}
+
+/** Girilen hıza göre dozu hesaplayıp aralığa göre renklendirir. */
+function inotHesapla(uid) {
+  const el = _ajanSatir(uid); if (!el) return;
+  const kutu = el.querySelector(".ajan-sonuc");
+  const ajan = el.querySelector(".ajan-adi").value;
+  const bilgi = ILAC_TABLOSU[ajan];
+  if (!bilgi) { kutu.style.display = "none"; return; }
+
+  const kilo   = sayi(document.getElementById("fKilo")?.value);
+  const miktar = el.querySelector(".ajan-miktar").value;
+  const hacim  = el.querySelector(".ajan-hacim").value;
+  const hiz    = el.querySelector(".ajan-hiz").value;
+
+  const aralikYazi = `Aralık: ${dozYaz(bilgi.min_doz, 2)}–${dozYaz(bilgi.max_doz, 2)} ${bilgi.doz_birimi}`;
+
+  if (bilgi.kilo_bazli && !kilo) {
+    kutu.className = "ajan-sonuc uyari";
+    kutu.innerHTML = `⚠ Doz hesabı için hastanın kilosunu girin. <span class="ajan-aralik">${aralikYazi}</span>`;
+    kutu.style.display = "block";
+    return;
+  }
+
+  const h = dozHesapla(ajan, miktar, hacim, hiz, kilo);
+  if (h.doz === null) {
+    kutu.className = "ajan-sonuc uyari";
+    kutu.innerHTML = `Hız girin. <span class="ajan-aralik">${aralikYazi}</span>`;
+    kutu.style.display = "block";
+    return;
+  }
+
+  // Referans aralığın karşılığı olan pompa hızı — pompayı ayarlarken yol gösterir
+  const altHiz = hizHesapla(ajan, bilgi.min_doz, miktar, hacim, kilo);
+  const ustHiz = hizHesapla(ajan, bilgi.max_doz, miktar, hacim, kilo);
+  const hizYazi = (altHiz !== null && ustHiz !== null)
+    ? ` · Aralığa karşılık gelen hız: ${dozYaz(altHiz, 1)}–${dozYaz(ustHiz, 1)} cc/h` : "";
+
+  const etiket = h.durum === "aralikta" ? "aralıkta"
+               : h.durum === "dusuk" ? "aralığın ALTINDA" : "aralığın ÜSTÜNDE";
+  kutu.className = `ajan-sonuc ${h.durum}`;
+  kutu.innerHTML =
+    `<strong>${dozYaz(h.doz, 3)} ${h.birim}</strong> — ${etiket}` +
+    `<span class="ajan-aralik">${aralikYazi}${hizYazi}</span>`;
+  kutu.style.display = "block";
+}
+
+/** Enteral beslenme seçiliyse yol (oral/NG/OG/PEG) kutucukları görünsün. */
+function beslenmeDegisti() {
+  const v = document.getElementById("fBeslenme").value;
+  const goster = v === "Enteral" || v === "Enteral+Parenteral";
+  const div = document.getElementById("beslenmeYoluDiv");
+  if (div) div.style.display = goster ? "" : "none";
+  if (!goster) {
+    document.querySelectorAll('#fBeslenmeYollariGroup input[type="checkbox"]').forEach(cb => cb.checked = false);
+  }
 }
 
 function havaYoluDegisti() {
   const v = document.getElementById("fHavaYolu").value;
-  document.getElementById("entubeDestekDiv").style.display = v === "Entübe/Trakeostomili" ? "block" : "none";
+  document.getElementById("entubeDestekDiv").style.display = entubeMi(v) ? "block" : "none";
   document.getElementById("nonEntubeDestekDiv").style.display = v === "Entübe değil" ? "block" : "none";
-  if (v !== "Entübe/Trakeostomili") {
+  if (!entubeMi(v)) {
     document.getElementById("fEntubeDestek").value = "";
     entubeDestekDegisti();
   }
@@ -888,22 +1419,45 @@ async function hastaKaydet(e) {
     });
   }
 
-  // İnotrop ajanlar
+  // İnotrop ajanlar — tablodakiler için hazırlık + hız, "Diğer" için serbest metin
   const inotVar = document.getElementById("fInotVar").checked;
   const inotAjanlar = [];
   document.getElementById("inotAjanList").querySelectorAll(".ajan-item").forEach(el => {
-    const ajan = el.querySelector('[data-field="ajan"]')?.value?.trim();
-    const doz  = el.querySelector('[data-field="doz"]')?.value?.trim();
-    if (ajan) inotAjanlar.push({ ajan, doz: doz || "" });
+    const secim = el.querySelector(".ajan-adi")?.value || "";
+    if (secim === "__diger__") {
+      const ad  = el.querySelector(".ajan-diger-ad")?.value?.trim();
+      const doz = el.querySelector(".ajan-diger-doz")?.value?.trim();
+      if (ad) inotAjanlar.push({ ajan: ad, doz: doz || "" });
+      return;
+    }
+    if (!ILAC_TABLOSU[secim]) return;
+    inotAjanlar.push({
+      ajan: secim,
+      doz: "",
+      carpan:      parseInt(el.querySelector(".ajan-carpan")?.value, 10) || 1,
+      hacim_cc:    sayi(el.querySelector(".ajan-hacim")?.value),
+      miktar:      sayi(el.querySelector(".ajan-miktar")?.value),
+      hiz_cc_saat: sayi(el.querySelector(".ajan-hiz")?.value),
+    });
   });
 
-  // Sedasyon ajanlar
+  // Sedasyon ajanlar — sabit listedekiler için hız, "Diğer" için serbest metin
   const sedVar = document.getElementById("fSedVar").checked;
   const sedAjanlar = [];
   document.getElementById("sedAjanList").querySelectorAll(".ajan-item").forEach(el => {
-    const ajan = el.querySelector('[data-field="ajan"]')?.value?.trim();
-    const doz  = el.querySelector('[data-field="doz"]')?.value?.trim();
-    if (ajan) sedAjanlar.push({ ajan, doz: doz || "" });
+    const secim = el.querySelector(".ajan-adi")?.value || "";
+    if (secim === "__diger__") {
+      const ad  = el.querySelector(".ajan-diger-ad")?.value?.trim();
+      const doz = el.querySelector(".ajan-diger-doz")?.value?.trim();
+      if (ad) sedAjanlar.push({ ajan: ad, doz: doz || "" });
+      return;
+    }
+    if (!secim) return;
+    sedAjanlar.push({
+      ajan: secim,
+      doz: "",
+      hiz_cc_saat: sayi(el.querySelector(".ajan-hiz")?.value),
+    });
   });
 
   // Planlanan işlemler
@@ -948,6 +1502,8 @@ async function hastaKaydet(e) {
     unite,
     yatak_no: String(yatakNo),
     ad_soyad: document.getElementById("fAdSoyad").value.trim(),
+    kilo: sayi(document.getElementById("fKilo").value),
+    boy:  sayi(document.getElementById("fBoy").value),
     tani: document.getElementById("fTani").value.trim(),
     kabul_epikrizi: document.getElementById("fKabulEpikrizi").value.trim(),
     klinik_durum: {
@@ -958,6 +1514,11 @@ async function hastaKaydet(e) {
       inot_var: inotVar, inot_ajanlar: inotAjanlar,
       sed_var:  sedVar,  sed_ajanlar:  sedAjanlar,
       beslenme: document.getElementById("fBeslenme").value,
+      beslenme_yollari: (() => {
+        const y = [];
+        document.querySelectorAll('#fBeslenmeYollariGroup input[type="checkbox"]:checked').forEach(cb => y.push(cb.value));
+        return y;
+      })(),
       diurez:   document.getElementById("fDiurez").value.trim(),
       ir_pupil: document.getElementById("fIrPupil").value,
       // Vasküler Erişim & Renal
@@ -974,13 +1535,19 @@ async function hastaKaydet(e) {
       crrt_var: document.getElementById("fCrrtVar").checked,
       crrt_baslangic: document.getElementById("fCrrtBaslangic")?.value || "",
       crrt_tipi: document.getElementById("fCrrtTipi")?.value || "",
+      // İnotrop alınmıyorsa bu ek tedaviler de alınmıyor demektir; gizli kalan
+      // eski işaretler kayda geçmesin.
+      bikarbonat_var:     inotVar && document.getElementById("fBikarbonatVar").checked,
+      metilen_mavisi_var: inotVar && document.getElementById("fMetilenVar").checked,
+      hidrokortizon_var:  inotVar && document.getElementById("fHidrokortizonVar").checked,
     },
     planlanan_islemler: planlananIslemler,
     goruntuleme_tetkik: goruntulemeTetkik,
     kultur_takibi: kulturTakibi,
     antibiyotikler: antibiyotikler,
     genel_not: document.getElementById("fGenelNot").value.trim(),
-    durum: "aktif",
+    // durum bilerek gönderilmiyor: backend mevcut değeri korur. Sabit "aktif"
+    // göndermek taburcu hastayı düzenlerken aktife çeviriyor ve çıkış kaydını siliyordu.
   };
 
   const btn = document.getElementById("btnKaydet");
@@ -1025,13 +1592,60 @@ async function hastaDetayAc(id) {
       <div class="detay-alan full"><div class="detay-alan-label">Tanı</div>
         <div class="detay-alan-value ${!hasta.tani ? "bos" : ""}">${escHtml(hasta.tani) || "Girilmedi"}</div>
       </div>
+      <div class="detay-alan"><div class="detay-alan-label">Kilo / Boy</div>
+        <div class="detay-alan-value ${!hasta.kilo && !hasta.boy ? "bos" : ""}">${
+          hasta.kilo || hasta.boy
+            ? `${hasta.kilo ? dozYaz(hasta.kilo, 1) + " kg" : "—"} / ${hasta.boy ? dozYaz(hasta.boy, 0) + " cm" : "—"}`
+            : "Girilmedi"}</div>
+      </div>
+      <div class="detay-alan"><div class="detay-alan-label">VKİ</div>
+        <div class="detay-alan-value ${vkiHesapla(hasta.kilo, hasta.boy) === null ? "bos" : ""}">${
+          vkiHesapla(hasta.kilo, hasta.boy) !== null
+            ? `${dozYaz(vkiHesapla(hasta.kilo, hasta.boy), 1)} kg/m² <small style="font-weight:normal;opacity:.8">${vkiSinifi(vkiHesapla(hasta.kilo, hasta.boy))}</small>`
+            : "—"}</div>
+      </div>
+      <div class="detay-alan"><div class="detay-alan-label">Günlük Kalori İhtiyacı</div>
+        <div class="detay-alan-value ${!kaloriIhtiyaci(hasta.kilo) ? "bos" : ""}">${
+          kaloriIhtiyaci(hasta.kilo)
+            ? `${kaloriIhtiyaci(hasta.kilo).min}–${kaloriIhtiyaci(hasta.kilo).max} kcal/gün <small style="font-weight:normal;opacity:.8">${KCAL_MIN_PER_KG}–${KCAL_MAX_PER_KG} kcal/kg</small>`
+            : "—"}</div>
+      </div>
       <div class="detay-alan"><div class="detay-alan-label">Oluşturma</div><div class="detay-alan-value" style="font-size:.8rem">${formatTarih(hasta.olusturma_tarihi)}</div></div>
       <div class="detay-alan"><div class="detay-alan-label">Son Güncelleme</div><div class="detay-alan-value" style="font-size:.8rem">${formatTarih(hasta.guncelleme_tarihi)}</div></div>
     </div>`;
 
   // ── Klinik Durum ────────────────────────────────────────────────────────
-  const inotStr = (klDurum.inot_ajanlar || []).map(a => `${a.ajan}${a.doz ? " " + a.doz : ""}`).join(" / ") || (klDurum.inot_var ? "Kullanılıyor" : "");
-  const sedStr  = (klDurum.sed_ajanlar  || []).map(a => `${a.ajan}${a.doz ? " " + a.doz : ""}`).join(" / ") || (klDurum.sed_var  ? "Kullanılıyor" : "");
+  // Dirençli şok ek tedavileri (kart fonksiyonundakinin detay ekranı karşılığı)
+  const ekTedaviler = [
+    klDurum.bikarbonat_var && "Bikarbonat inf.",
+    klDurum.metilen_mavisi_var && "Metilen mavisi",
+    klDurum.hidrokortizon_var && "Hidrokortizon",
+  ].filter(Boolean);
+
+  // İnotroplar: hazırlık, hız ve hesaplanan doz satır satır
+  const inotDetayHtml = (klDurum.inot_ajanlar || []).filter(a => a && a.ajan).map(a => {
+    const o = inotOzeti(a, hasta.kilo);
+    if (!o.tabloda) {
+      return `<div class="inot-detay-satir">${escHtml(o.ajan)}${o.metin ? ` — ${escHtml(o.metin)}` : ""}</div>`;
+    }
+    const hazirlik = `x${o.carpan} · ${dozYaz(o.miktar, 1)} ${o.miktar_birimi}/${dozYaz(o.hacim, 0)} cc`;
+    const hiz = o.hiz !== null ? ` · ${dozYaz(o.hiz, 1)} cc/h` : "";
+    const doz = o.doz !== null
+      ? `<span class="inot-doz ${o.durum}">${dozYaz(o.doz, 3)} ${o.doz_birimi}</span>`
+      : o.metin
+      ? `<span class="inot-doz">${escHtml(o.metin)}</span>`
+      : `<span class="inot-doz uyari">${!hasta.kilo ? "kilo girilmemiş" : "hız girilmemiş"}</span>`;
+    return `<div class="inot-detay-satir">
+        <strong>${escHtml(o.ajan)}</strong> ${doz}
+        <small>${hazirlik}${hiz} · aralık ${dozYaz(o.min_doz, 2)}–${dozYaz(o.max_doz, 2)} ${o.doz_birimi}</small>
+      </div>`;
+  }).join("");
+  const inotStr = inotDetayHtml || (klDurum.inot_var ? "Kullanılıyor" : "");
+  const sedStr = (klDurum.sed_ajanlar || []).filter(a => a && a.ajan).map(a => {
+    const hiz = sayi(a.hiz_cc_saat);
+    const detay = hiz !== null ? `${dozYaz(hiz, 1)} cc/h` : (a.doz ? escHtml(a.doz) : "");
+    return `<div class="inot-detay-satir"><strong>${escHtml(a.ajan)}</strong>${detay ? ` <span class="inot-doz">${detay}</span>` : ""}</div>`;
+  }).join("") || (klDurum.sed_var ? "Kullanılıyor" : "");
 
   const klinikHtml = `
     <div class="detay-section" style="margin-top:16px;">
@@ -1039,8 +1653,8 @@ async function hastaDetayAc(id) {
       <div class="klinik-durum-grid">
         <div class="kd-panel ${(klDurum.hava_yolu || klDurum.vent_var) ? "aktif-vent" : ""}">
           <div class="kd-panel-label">🫁 Solunum / Hava Yolu</div>
-          ${klDurum.hava_yolu === "Entübe/Trakeostomili"
-            ? `<div class="kd-panel-value vent-v">Entübe/Trakeostomili<br><small style="font-weight:normal;opacity:0.9">${escHtml(klDurum.entube_destek)}${klDurum.entube_destek === 'Mekanik ventilatöre bağlı' && klDurum.vent_mod ? ' — ' + escHtml(klDurum.vent_mod) : ''}</small></div>`
+          ${entubeMi(klDurum.hava_yolu)
+            ? `<div class="kd-panel-value vent-v">${escHtml(klDurum.hava_yolu)}<br><small style="font-weight:normal;opacity:0.9">${escHtml(klDurum.entube_destek)}${klDurum.entube_destek === 'Mekanik ventilatöre bağlı' && klDurum.vent_mod ? ' — ' + escHtml(klDurum.vent_mod) : ''}</small></div>`
             : klDurum.hava_yolu === "Entübe değil" && klDurum.non_entube_destek && klDurum.non_entube_destek.length
             ? `<div class="kd-panel-value vent-v">Entübe Değil<br><small style="font-weight:normal;opacity:0.9">${escHtml(klDurum.non_entube_destek.join(", "))}</small></div>`
             : klDurum.vent_var 
@@ -1050,18 +1664,20 @@ async function hastaDetayAc(id) {
         <div class="kd-panel ${klDurum.inot_var ? "aktif-inot" : ""}">
           <div class="kd-panel-label">💉 İnotrop / Vazopressör</div>
           ${klDurum.inot_var
-            ? `<div class="kd-panel-value inot-v">${escHtml(inotStr) || "Kullanılıyor"}</div>`
+            ? `<div class="kd-panel-value inot-v">${inotStr || "Kullanılıyor"}</div>`
             : `<div class="kd-panel-value bos">—</div>`}
         </div>
         <div class="kd-panel ${klDurum.sed_var ? "aktif-sed" : ""}">
           <div class="kd-panel-label">💊 Sedasyon</div>
           ${klDurum.sed_var
-            ? `<div class="kd-panel-value sed-v">${escHtml(sedStr) || "Kullanılıyor"}</div>`
+            ? `<div class="kd-panel-value sed-v">${sedStr || "Kullanılıyor"}</div>`
             : `<div class="kd-panel-value bos">—</div>`}
         </div>
         <div class="kd-panel">
           <div class="kd-panel-label">🍽 Beslenme</div>
-          <div class="kd-panel-value ${!klDurum.beslenme || klDurum.beslenme === "Yok" ? "bos" : ""}">${escHtml(klDurum.beslenme) || "—"}</div>
+          <div class="kd-panel-value ${!klDurum.beslenme || klDurum.beslenme === "Yok" ? "bos" : ""}">${escHtml(klDurum.beslenme) || "—"}${
+            (klDurum.beslenme_yollari || []).length
+              ? `<br><small style="font-weight:normal;opacity:.9">${escHtml(klDurum.beslenme_yollari.join(" / "))}</small>` : ""}</div>
         </div>
         <div class="kd-panel">
           <div class="kd-panel-label">💧 Diürez</div>
@@ -1102,6 +1718,12 @@ async function hastaDetayAc(id) {
           ${klDurum.crrt_var
             ? `<div class="kd-panel-value inot-v">Alıyor${klDurum.crrt_tipi ? ' (' + escHtml(klDurum.crrt_tipi) + ')' : ''}
                ${klDurum.crrt_baslangic ? '<br><small style="font-weight:normal;opacity:.9">Başlangıç: ' + escHtml(klDurum.crrt_baslangic) + (kacGundurKullaniliyor(klDurum.crrt_baslangic) ? ' — ' + kacGundurKullaniliyor(klDurum.crrt_baslangic) : '') + '</small>' : ''}</div>`
+            : `<div class="kd-panel-value bos">—</div>`}
+        </div>
+        <div class="kd-panel ${ekTedaviler.length ? 'aktif-inot' : ''}">
+          <div class="kd-panel-label">🧪 Şok Ek Tedavileri</div>
+          ${ekTedaviler.length
+            ? `<div class="kd-panel-value inot-v">${escHtml(ekTedaviler.join(", "))}</div>`
             : `<div class="kd-panel-value bos">—</div>`}
         </div>
       </div>
@@ -1470,15 +2092,35 @@ async function hastaSil(id) {
 // ── PDF EXPORT
 // ════════════════════════════════════════════════════════════════════════════
 
+/**
+ * PDF motoru yoksa (macOS'ta WeasyPrint sistem kütüphanesi eksikse) yazdırma
+ * görünümünü yeni sekmede aç. Kimlik doğrulama çerezle yapıldığı için düz
+ * bağlantı çalışır; kullanıcı Cmd/Ctrl+P ile PDF olarak kaydedebilir.
+ */
+function yazdirmaGorunumuAc(sorgu) {
+  const pencere = window.open(`${API}/api/export/html?${sorgu}`, "_blank");
+  if (pencere) {
+    toast("PDF motoru yok — yazdırma görünümü açıldı. Cmd/Ctrl+P ile PDF olarak kaydedebilirsiniz.", "info", 9000);
+  } else {
+    toast("Yazdırma görünümü açılamadı (açılır pencere engellenmiş olabilir).", "error", 9000);
+  }
+}
+
 async function exportPdf() {
   const btn = document.getElementById("btnExportPdf");
+  const sorgu = `durum=aktif&unite=${encodeURIComponent(aktifUnite)}`;
   btn.disabled = true; btn.textContent = "Hazırlanıyor…";
-  toast("PDF hazırlanıyor (Chromium)…", "info", 12000);
+  toast("PDF hazırlanıyor…", "info", 12000);
   try {
     const token = localStorage.getItem("vizit_token");
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    const res = await fetch(`${API}/api/export/pdf?durum=aktif&unite=${encodeURIComponent(aktifUnite)}`, { headers });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "PDF hatası"); }
+    const res = await fetch(`${API}/api/export/pdf?${sorgu}`, { headers });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      // 503 = PDF motoru yüklenemedi; yazdırma görünümüne düş
+      if (res.status === 503) { toast("PDF hatası: " + (e.detail || ""), "error", 12000); yazdirmaGorunumuAc(sorgu); return; }
+      throw new Error(e.detail || "PDF hatası");
+    }
     const blob = await res.blob();
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
@@ -1500,7 +2142,11 @@ async function exportPdfTekHasta(id) {
     const token = localStorage.getItem("vizit_token");
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
     const res = await fetch(`${API}/api/export/pdf?hasta_ids=${id}`, { headers });
-    if (!res.ok) throw new Error("PDF oluşturulamadı");
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      if (res.status === 503) { toast("PDF hatası: " + (e.detail || ""), "error", 12000); yazdirmaGorunumuAc(`hasta_ids=${id}`); return; }
+      throw new Error(e.detail || "PDF oluşturulamadı");
+    }
     const blob = await res.blob();
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a"); a.href = url;

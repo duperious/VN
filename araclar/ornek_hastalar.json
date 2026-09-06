@@ -1,0 +1,48 @@
+{
+  "_aciklama": "hasta_aktar.py için örnek/şablon dosya. GERÇEK HASTA VERİSİNİ BU DOSYAYA YAZMAYIN — depo herkese açık. Kendi verinizi araclar/ altında başka bir .json adıyla tutun; .gitignore onları depo dışında bırakır.",
+  "unite": "ARYB-1",
+  "hastalar": [
+    {
+      "yatak_no": "1",
+      "ad_soyad": "A.B.",
+      "tani": "Örnek tanı — 60Y E (01/01)",
+      "kabul_epikrizi": "Kabul öyküsü buraya yazılır.",
+      "kilo": null,
+      "boy": null,
+      "klinik_durum": {
+        "hava_yolu": "Entübe",
+        "entube_destek": "Mekanik ventilatöre bağlı",
+        "vent_mod": "SIMV",
+        "inot_var": true,
+        "inot_ajanlar": [
+          {"ajan": "Noradrenalin", "carpan": 1, "hacim_cc": 100, "miktar": 8, "hiz_cc_saat": 5},
+          {"ajan": "Marka adı (tabloda yoksa serbest metin)", "doz": "elle yazılan doz"}
+        ],
+        "sed_var": true,
+        "sed_ajanlar": [{"ajan": "Propofol", "hiz_cc_saat": 12}],
+        "beslenme": "Enteral",
+        "beslenme_yollari": ["NG"],
+        "diurez": "Aktif",
+        "ir_pupil": "Bilateral +/+",
+        "cvp_var": false,
+        "diyaliz_var": false,
+        "crrt_var": false,
+        "bikarbonat_var": false
+      },
+      "kultur_takibi": [
+        {"tur": "Kan", "tarih": "2026-01-01", "sonuc": "Üreme yok"},
+        {"tur": "İdrar", "tarih": "2026-01-02", "sonuc": "Bekleniyor"}
+      ],
+      "antibiyotikler": [
+        {"ad": "Meropenem", "doz": "3x1 gr", "baslangic_tarihi": "2026-01-01"}
+      ],
+      "planlanan_islemler": [
+        {"tanim": "Örnek işlem", "tarih": "2026-01-05", "tamamlandi": false}
+      ],
+      "goruntuleme_tetkik": [
+        {"tarih": "2026-01-03", "icerik": "Akciğer grafisi"}
+      ],
+      "genel_not": "Uygulamada karşılığı olmayan bilgiler (GKS, CRP/PK, balans) buraya yazılabilir."
+    }
+  ]
+}
